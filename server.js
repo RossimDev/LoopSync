@@ -16,6 +16,7 @@ const PORT = Number(process.env.PORT || 3000);
 
 const UPLOAD_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), "loopsync-"));
 const MAX_UPLOAD_BYTES = Number(process.env.LOOPSYNC_MAX_UPLOAD_BYTES || 2 * 1024 * 1024 * 1024);
+const RESULT_RETENTION_MS = Number(process.env.LOOPSYNC_RESULT_RETENTION_MS || 10 * 60 * 1000);
 
 /** Simple in-memory job store. Files live on disk only while the job exists. */
 const jobs = new Map();
@@ -131,6 +132,7 @@ async function runJob(job) {
     job.status = "done";
     job.phase = "completed";
     job.percent = 100;
+    job.timeout = setTimeout(() => cleanupJob(job), RESULT_RETENTION_MS);
     job.result = {
       videoName: job.videoName,
       audioName: job.audioName,
@@ -194,15 +196,22 @@ app.get("/api/result/:id", (req, res) => {
 
   const fileName = job.result.fileName || "LoopSync.mp4";
 
+  // The generated MP4 is kept for a short window so the user can both save and
+  // share the same result. The uploaded source files were already removed.
+  job.timeout = setTimeout(() => cleanupJob(job), RESULT_RETENTION_MS);
+
   res.setHeader("Content-Type", "video/mp4");
   res.setHeader("Content-Length", fs.statSync(job.outputPath).size);
   res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
 
   const stream = fs.createReadStream(job.outputPath);
   stream.pipe(res);
+});
 
-  res.on("finish", () => cleanupJob(job));
-  res.on("close", () => cleanupJob(job));
+app.post("/api/clear/:id", (req, res) => {
+  const job = jobs.get(req.params.id);
+  if (job) cleanupJob(job);
+  res.json({ ok: true });
 });
 
 app.get("/health", (_req, res) => {

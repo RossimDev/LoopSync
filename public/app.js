@@ -220,9 +220,16 @@ function setProgress(percent, text) {
   if (text) els.progressText.textContent = text;
 }
 
-function resetToEdit() {
+function clearOldJob() {
+  if (state.jobId && state.result) {
+    fetch(`/api/clear/${state.jobId}`, { method: "POST" }).catch(() => {});
+  }
   state.jobId = null;
   state.result = null;
+}
+
+function resetToEdit() {
+  clearOldJob();
   state.busy = false;
   showScreen("form");
   els.generateBtn.classList.remove("loading");
@@ -276,8 +283,8 @@ async function generate() {
     return;
   }
 
+  clearOldJob();
   state.busy = true;
-  state.result = null;
   showScreen("processing");
   els.generateBtn.classList.add("loading");
   setProgress(2, "Enviando arquivos…");
