@@ -209,6 +209,22 @@ app.get("/health", (_req, res) => {
   res.json({ ok: true, service: "loopsync" });
 });
 
+// Convert multer/upload errors into a small JSON response and clean partial
+// temp files, so the UI can show a friendly message instead of an exception.
+app.use((err, req, res, _next) => {
+  if (req.loopsyncJobDir) {
+    try { fs.rmSync(req.loopsyncJobDir, { recursive: true, force: true }); } catch { /* ignore */ }
+  }
+  const isSize = err instanceof multer.MulterError && err.code === "LIMIT_FILE_SIZE";
+  const status = isSize ? 413 : 400;
+  res.status(status).json({
+    ok: false,
+    error: isSize
+      ? "Este arquivo é muito grande para ser processado."
+      : (err && err.message) || "Não foi possível enviar os arquivos.",
+  });
+});
+
 // If host configuration exists for this app's long-running preview server,
 // keep it permissive so the browser preview can reach the API.
 app.listen(PORT, "0.0.0.0", () => {
