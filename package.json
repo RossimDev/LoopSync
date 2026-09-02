@@ -1,0 +1,40 @@
+{
+  "name": "loopsync",
+  "version": "1.0.0",
+  "description": "LoopSync — junta vídeo e áudio automaticamente com loop",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "test": "node scripts/validate.js",
+    "build": "node scripts/copy-wasm-vendor.js",
+    "test:browser": "node scripts/test-browser.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/RossimDev/LoopSync.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/RossimDev/LoopSync/issues"
+  },
+  "homepage": "https://github.com/RossimDev/LoopSync#readme",
+  "dependencies": {
+    "@ffmpeg-installer/ffmpeg": "^1.1.0",
+    "@ffmpeg/core": "^0.12.6",
+    "@ffmpeg/ffmpeg": "^0.12.10",
+    "@ffmpeg/util": "^0.12.1",
+    "@ffprobe-installer/ffprobe": "^2.1.2",
+    "express": "^5.2.1",
+    "multer": "^2.3.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "@sparticuz/chromium": "^149.0.0",
+    "puppeteer-core": "^25.9.0"
+  }
+}
