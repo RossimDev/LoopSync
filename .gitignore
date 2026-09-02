@@ -3,3 +3,4 @@ dist/
 tmp-test-assets/
 *.log
 .DS_Store
+public/vendor/
