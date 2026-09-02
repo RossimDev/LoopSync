@@ -28,12 +28,24 @@ watermarks, beat sync ou qualquer efeito.
 ## Tecnologia
 
 - Frontend: HTML / CSS / JavaScript puro (sem framework pesado).
-- Backend: Node.js + Express.
+- Backend (opcional): Node.js + Express.
 - Processamento de mídia: **ffmpeg** via
   [`@ffmpeg-installer/ffmpeg`](https://www.npmjs.com/package/@ffmpeg-installer/ffmpeg)
-  e [`@ffprobe-installer/ffprobe`](https://www.npmjs.com/package/@ffprobe-installer/ffprobe).
+  e [`@ffprobe-installer/ffprobe`](https://www.npmjs.com/package/@ffprobe-installer/ffprobe)
+  no modo servidor, ou **ffmpeg.wasm** (`@ffmpeg/ffmpeg` + `@ffmpeg/core`)
+  direto no navegador no modo estático.
 
-O backend é a camada de processamento real do LoopSync. Ele:
+### Dois modos de processamento
+
+O app detecta automaticamente onde está rodando (via `/health`):
+
+- **Modo servidor** (`npm start`): o Express processa com ffmpeg nativo —
+  rápido e sem limite prático de tamanho de arquivo.
+- **Modo estático / Vercel**: sem backend, o processamento acontece
+  **100% no navegador do usuário** com ffmpeg.wasm. Os arquivos nunca saem
+  do dispositivo — privacidade máxima.
+
+Nos dois modos a operação é idêntica:
 
 1. recebe temporariamente os dois arquivos selecionados;
 2. descobre as durações com `ffprobe`;
@@ -60,6 +72,20 @@ npm start
 ```
 
 O servidor abre em `http://localhost:3000` e serve o app.
+
+## Deploy na Vercel
+
+O repositório já contém `vercel.json` configurado (build `npm run build`,
+saída `public/`). O build copia o ffmpeg.wasm dos pacotes npm para
+`public/vendor/`, então o site não depende de nenhum CDN externo.
+
+1. Acesse [vercel.com/new](https://vercel.com/new) e importe o repositório
+   `RossimDev/LoopSync`;
+2. Não é preciso alterar nada (framework: *Other*) — clique em **Deploy**.
+
+Na Vercel o processamento roda com ffmpeg.wasm no navegador do usuário
+(uploads para funções serverless são limitados a ~4,5 MB, então processar no
+dispositivo é a única arquitetura viável — e também a mais privada).
 
 ## Testes
 

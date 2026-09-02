@@ -9,6 +9,8 @@ const state = {
   audioUrl: null,
   jobId: null,
   result: null,
+  resultBlobUrl: null,
+  backendAvailable: null,
   busy: false,
 };
 
@@ -224,6 +226,10 @@ function clearOldJob() {
   if (state.jobId && state.result) {
     fetch(`/api/clear/${state.jobId}`, { method: "POST" }).catch(() => {});
   }
+  if (state.resultBlobUrl) {
+    URL.revokeObjectURL(state.resultBlobUrl);
+    state.resultBlobUrl = null;
+  }
   state.jobId = null;
   state.result = null;
 }
@@ -276,6 +282,88 @@ async function pollJob(jobId, onProgress) {
   }
 }
 
+async function hasBackend() {
+  if (state.backendAvailable !== null) return state.backendAvailable;
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 3000);
+    const res = await fetch("/health", { signal: controller.signal });
+    clearTimeout(timer);
+    let ok = false;
+    if (res.ok) {
+      try {
+        const body = await res.json();
+        ok = Boolean(body && body.ok && body.service === "loopsync");
+      } catch {
+        ok = false;
+      }
+    }
+    state.backendAvailable = ok;
+  } catch {
+    state.backendAvailable = false;
+  }
+  return state.backendAvailable;
+}
+
+function timestampName(date = new Date()) {
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}_${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`;
+}
+
+async function generateInBrowser() {
+  setProgress(3, "Carregando o motor de vídeo…");
+
+  const { blob, actualDuration } = await window.LoopSyncWasm.processInBrowser({
+    videoFile: state.videoFile,
+    audioFile: state.audioFile,
+    videoDuration: state.videoDuration,
+    audioDuration: state.audioDuration,
+    onProgress: ({ percent, text }) => setProgress(percent, text),
+  });
+
+  const blobUrl = URL.createObjectURL(blob);
+  state.resultBlobUrl = blobUrl;
+
+  return {
+    videoName: state.videoFile.name,
+    audioName: state.audioFile.name,
+    videoDuration: formatDuration(state.videoDuration),
+    audioDuration: formatDuration(state.audioDuration),
+    outputDuration: formatDuration(actualDuration),
+    loopCount: computeLoopCount(state.videoDuration, state.audioDuration),
+    sizeBytes: blob.size,
+    downloadUrl: blobUrl,
+    fileName: `LoopSync_${timestampName()}.mp4`,
+  };
+}
+
+async function generateWithServer() {
+  const form = new FormData();
+  form.append("video", state.videoFile, state.videoFile.name);
+  form.append("audio", state.audioFile, state.audioFile.name);
+
+  const uploadRes = await uploadWithProgress(form, (loaded) => {
+    const percent = Math.max(2, Math.round(loaded * 5));
+    setProgress(percent, `Enviando arquivos… ${Math.round(loaded * 100)}%`);
+  });
+
+  state.jobId = uploadRes.id;
+  setProgress(8, "Reconhecendo arquivos…");
+
+  const done = await pollJob(state.jobId, (job) => {
+    const percent = Math.max(8, job.percent || 0);
+    if (job.phase === "probing") {
+      setProgress(percent, "Reconhecendo arquivos…");
+    } else if (job.phase === "processing" || job.status === "processing") {
+      setProgress(percent, "Repetindo vídeo até o final do áudio…");
+    } else if (job.status === "done") {
+      setProgress(100, "Finalizando…");
+    }
+  });
+
+  return done.result;
+}
+
 async function generate() {
   if (state.busy) return;
   if (!state.videoFile || !state.audioFile) {
@@ -287,36 +375,16 @@ async function generate() {
   state.busy = true;
   showScreen("processing");
   els.generateBtn.classList.add("loading");
-  setProgress(2, "Enviando arquivos…");
+  setProgress(2, "Preparando…");
 
   try {
-    const form = new FormData();
-    form.append("video", state.videoFile, state.videoFile.name);
-    form.append("audio", state.audioFile, state.audioFile.name);
-
-    const uploadRes = await uploadWithProgress(form, (loaded) => {
-      const percent = Math.max(2, Math.round(loaded * 5));
-      setProgress(percent, `Enviando arquivos… ${Math.round(loaded * 100)}%`);
-    });
-
-    state.jobId = uploadRes.id;
-    setProgress(8, "Reconhecendo arquivos…");
-
-    const done = await pollJob(state.jobId, (job) => {
-      const percent = Math.max(8, job.percent || 0);
-      if (job.phase === "probing") {
-        setProgress(percent, "Reconhecendo arquivos…");
-      } else if (job.phase === "processing" || job.status === "processing") {
-        setProgress(percent, "Repetindo vídeo até o final do áudio…");
-      } else if (job.status === "done") {
-        setProgress(100, "Finalizando…");
-      }
-    });
-
-    state.result = done.result;
-    showResult(done.result);
+    const useServer = await hasBackend();
+    const result = useServer ? await generateWithServer() : await generateInBrowser();
+    state.result = result;
+    showResult(result);
   } catch (err) {
     if (state.result) return;
+    console.error("LoopSync:", err);
     showToast(err && err.message ? err.message : "Não foi possível gerar o vídeo.", "error");
     resetToEdit();
   } finally {
