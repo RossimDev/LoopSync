@@ -65,10 +65,24 @@ const upload = multer({
 
 app.use(express.json({ limit: "1mb" }));
 
-app.use(express.static(path.join(__dirname, "public"), {
-  extensions: ["html"],
-  maxAge: process.env.NODE_ENV === "production" ? "1h" : 0,
-}));
+// In production, serve the Vite-built dist/ directory. In development, Vite's
+// dev server handles the frontend and proxies /api and /health here.
+const staticDir = process.env.NODE_ENV === "production"
+  ? path.join(__dirname, "dist")
+  : path.join(__dirname, "dist");
+
+if (fs.existsSync(staticDir)) {
+  app.use(express.static(staticDir, {
+    extensions: ["html"],
+    maxAge: process.env.NODE_ENV === "production" ? "1h" : 0,
+  }));
+} else {
+  // Fallback for environments where dist/ has not been built yet
+  app.use(express.static(path.join(__dirname, "public"), {
+    extensions: ["html"],
+    maxAge: process.env.NODE_ENV === "production" ? "1h" : 0,
+  }));
+}
 
 app.post("/api/process", upload.fields([{ name: "video", maxCount: 1 }, { name: "audio", maxCount: 1 }]), (req, res) => {
   const video = req.files && req.files.video && req.files.video[0];
@@ -195,17 +209,53 @@ app.get("/api/result/:id", (req, res) => {
   }
 
   const fileName = job.result.fileName || "LoopSync.mp4";
+  const stat = fs.statSync(job.outputPath);
+  const fileSize = stat.size;
 
-  // The generated MP4 is kept for a short window so the user can both save and
-  // share the same result. The uploaded source files were already removed.
+  // Retain the file for another window (clearTimeout before re-arming)
+  clearTimeout(job.timeout);
   job.timeout = setTimeout(() => cleanupJob(job), RESULT_RETENTION_MS);
 
   res.setHeader("Content-Type", "video/mp4");
-  res.setHeader("Content-Length", fs.statSync(job.outputPath).size);
-  res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
+  res.setHeader("Accept-Ranges", "bytes");
 
-  const stream = fs.createReadStream(job.outputPath);
-  stream.pipe(res);
+  // ?inline=1 → Content-Disposition: inline (for preview player)
+  const inline = req.query.inline === "1";
+  if (inline) {
+    res.setHeader("Content-Disposition", `inline; filename="${fileName}"`);
+  } else {
+    res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
+  }
+
+  // Range request support
+  const rangeHeader = req.headers.range;
+  if (rangeHeader) {
+    const match = rangeHeader.match(/^bytes=(\d+)-(\d*)$/);
+    if (!match) {
+      res.setHeader("Content-Range", `bytes */${fileSize}`);
+      return res.status(416).end();
+    }
+
+    const start = parseInt(match[1], 10);
+    const end = match[2] ? parseInt(match[2], 10) : fileSize - 1;
+
+    if (start >= fileSize || end >= fileSize || start > end) {
+      res.setHeader("Content-Range", `bytes */${fileSize}`);
+      return res.status(416).end();
+    }
+
+    const chunkSize = end - start + 1;
+    res.status(206);
+    res.setHeader("Content-Range", `bytes ${start}-${end}/${fileSize}`);
+    res.setHeader("Content-Length", chunkSize);
+
+    const stream = fs.createReadStream(job.outputPath, { start, end });
+    stream.pipe(res);
+  } else {
+    res.setHeader("Content-Length", fileSize);
+    const stream = fs.createReadStream(job.outputPath);
+    stream.pipe(res);
+  }
 });
 
 app.post("/api/clear/:id", (req, res) => {
@@ -234,8 +284,6 @@ app.use((err, req, res, _next) => {
   });
 });
 
-// If host configuration exists for this app's long-running preview server,
-// keep it permissive so the browser preview can reach the API.
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`LoopSync server listening on http://0.0.0.0:${PORT}`);
 });

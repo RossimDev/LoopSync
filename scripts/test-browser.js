@@ -1,7 +1,7 @@
 "use strict";
 
 /**
- * Teste E2E do modo estático (Vercel): serve public/ SEM backend e valida no
+ * Teste E2E do modo estático (Vercel): serve dist/ SEM backend e valida no
  * Chromium headless que o fluxo completo funciona com ffmpeg.wasm:
  *   selecionar vídeo + áudio -> GERAR VÍDEO -> MP4 real com duração == áudio.
  */
@@ -15,7 +15,7 @@ const { spawnSync } = require("child_process");
 const ffprobePath = require("@ffprobe-installer/ffprobe").path;
 const { createTestAssets } = require("./make-test-assets");
 
-const PUBLIC_DIR = path.join(__dirname, "..", "public");
+const DIST_DIR = path.join(__dirname, "..", "dist");
 const PORT = 8123;
 
 const MIME = {
@@ -31,10 +31,17 @@ function staticServer() {
   return http.createServer((req, res) => {
     let urlPath = decodeURIComponent(req.url.split("?")[0]);
     if (urlPath === "/") urlPath = "/index.html";
-    const filePath = path.join(PUBLIC_DIR, path.normalize(urlPath));
-    if (!filePath.startsWith(PUBLIC_DIR) || !fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
-      res.writeHead(404, { "Content-Type": "text/plain" });
-      res.end("not found"); // inclui /health -> modo navegador
+    const filePath = path.join(DIST_DIR, path.normalize(urlPath));
+    if (!filePath.startsWith(DIST_DIR) || !fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+      // SPA fallback: serve index.html for routes not found
+      const indexPath = path.join(DIST_DIR, "index.html");
+      if (fs.existsSync(indexPath)) {
+        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+        fs.createReadStream(indexPath).pipe(res);
+      } else {
+        res.writeHead(404, { "Content-Type": "text/plain" });
+        res.end("not found");
+      }
       return;
     }
     res.writeHead(200, { "Content-Type": MIME[path.extname(filePath)] || "application/octet-stream" });
@@ -43,6 +50,11 @@ function staticServer() {
 }
 
 async function main() {
+  if (!fs.existsSync(DIST_DIR)) {
+    console.error("dist/ não encontrado. Rode 'npm run build' primeiro.");
+    process.exit(1);
+  }
+
   const chromium = require("@sparticuz/chromium").default || require("@sparticuz/chromium");
   const puppeteer = require("puppeteer-core");
 
@@ -83,15 +95,19 @@ async function main() {
     await videoInput.uploadFile(path.join(assets, "video-05.mp4"));
     await audioInput.uploadFile(path.join(assets, "audio-20.m4a"));
 
+    // Wait for generate button to become enabled (React renders conditionally)
     await page.waitForFunction(
-      () => !document.getElementById("generateBtn").disabled,
+      () => {
+        const btn = document.getElementById("generateBtn");
+        return btn && !btn.disabled;
+      },
       { timeout: 15000 }
     );
 
     const info = await page.evaluate(() => ({
-      video: document.getElementById("infoVideoDuration").textContent,
-      audio: document.getElementById("infoAudioDuration").textContent,
-      loops: document.getElementById("infoLoops").textContent,
+      video: document.getElementById("infoVideoDuration")?.textContent || "",
+      audio: document.getElementById("infoAudioDuration")?.textContent || "",
+      loops: document.getElementById("infoLoops")?.textContent || "",
     }));
     console.log("Painel de informações:", JSON.stringify(info));
     if (info.loops !== "4") throw new Error(`loops esperado 4, obtido ${info.loops}`);
@@ -102,18 +118,18 @@ async function main() {
     const monitor = setInterval(async () => {
       try {
         const s = await page.evaluate(() => ({
-          progress: document.getElementById("progressText").textContent,
-          toast: document.getElementById("toast").textContent,
-          form: !document.getElementById("appForm").hidden,
-          result: !document.getElementById("resultPanel").hidden,
+          progress: document.getElementById("progressText")?.textContent || "",
+          toast: document.getElementById("toast")?.textContent || "",
+          result: !!document.getElementById("resultPanel"),
         }));
         console.log("  [estado]", JSON.stringify(s));
       } catch { /* ignore */ }
     }, 8000);
 
     try {
+      // Wait for result panel to appear (React conditionally renders it)
       await page.waitForFunction(
-        () => !document.getElementById("resultPanel").hidden,
+        () => !!document.getElementById("resultPanel"),
         { timeout: 240000, polling: 500 }
       );
     } finally {
@@ -121,15 +137,26 @@ async function main() {
     }
 
     const result = await page.evaluate(() => ({
-      duration: document.getElementById("resultDuration").textContent,
-      meta: document.getElementById("resultMeta").textContent,
-      href: document.getElementById("saveBtn").href,
-      download: document.getElementById("saveBtn").getAttribute("download"),
+      duration: document.getElementById("resultDuration")?.textContent || "",
+      meta: document.getElementById("resultMeta")?.textContent || "",
+      href: document.getElementById("saveBtn")?.href || "",
+      download: document.getElementById("saveBtn")?.getAttribute("download") || "",
     }));
     console.log("Resultado na tela:", JSON.stringify(result));
 
     if (!result.href.startsWith("blob:")) throw new Error("resultado não é um blob local");
     if (result.duration !== "00:20") throw new Error(`duração exibida ${result.duration} != 00:20`);
+
+    // Validate result video player has correct duration
+    const videoDur = await page.evaluate(() => {
+      const v = document.getElementById("resultVideo");
+      return v ? v.duration : NaN;
+    });
+    console.log("Result video duration:", videoDur);
+    if (Number.isFinite(videoDur)) {
+      const diffMs = Math.abs(videoDur - 20) * 1000;
+      if (diffMs > 500) throw new Error(`player de preview com duração errada: ${videoDur}s (dif ${diffMs.toFixed(0)}ms)`);
+    }
 
     // Baixa o blob de dentro da página e valida com ffprobe.
     const b64 = await page.evaluate(async (href) => {

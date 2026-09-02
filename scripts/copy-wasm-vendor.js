@@ -1,7 +1,7 @@
 "use strict";
 
 /**
- * Copia os arquivos do ffmpeg.wasm dos pacotes npm para public/vendor/, para
+ * Copia os arquivos do ffmpeg.wasm dos pacotes npm para static/vendor/, para
  * que o app funcione como site estático (ex.: Vercel) sem depender de CDN.
  */
 
@@ -9,7 +9,7 @@ const fs = require("fs");
 const path = require("path");
 
 const root = path.join(__dirname, "..");
-const vendor = path.join(root, "public", "vendor");
+const vendor = path.join(root, "static", "vendor");
 
 const files = [
   ["@ffmpeg/ffmpeg/dist/umd/ffmpeg.js", "ffmpeg.js"],
@@ -29,4 +29,4 @@ for (const [from, to] of files) {
   console.log(`vendor/${to}  (${kb} KB)`);
 }
 
-console.log("ffmpeg.wasm copiado para public/vendor/");
+console.log("ffmpeg.wasm copiado para static/vendor/");
