@@ -1,0 +1,50 @@
+name: testes
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  testes:
+    name: LoopSync + YouTube
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Dependências
+        run: npm ci
+
+      - name: Build (Vite + ffmpeg.wasm em dist/vendor)
+        run: npm run build
+
+      - name: Pipeline de mídia (ffmpeg)
+        run: npm test
+
+      - name: Módulo YouTube — integração + API
+        run: npm run test:youtube
+
+      - name: Módulo YouTube — interface (jsdom)
+        run: npm run test:youtube:ui
+
+      - name: Módulo YouTube — E2E no Chromium (desktop, tablet e celular)
+        env:
+          SCREENSHOTS: ${{ github.workspace }}/screenshots
+        run: npm run test:youtube:browser
+
+      - name: Capturas de tela do E2E
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots-youtube
+          path: screenshots/
+          if-no-files-found: ignore
+          retention-days: 14

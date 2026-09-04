@@ -1,6 +1,8 @@
 import React, { useState, useRef, useCallback, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { processInBrowser } from "./lib/wasm.js";
+import YouTube from "./youtube/YouTube.jsx";
+import "./youtube.css";
 
 /* ─── helpers ────────────────────────────────────────────────────── */
 
@@ -155,7 +157,18 @@ const childFadeUp = {
 
 /* ─── App ────────────────────────────────────────────────────────── */
 
+function areaFromHash() {
+  const hash = String(window.location.hash || "");
+  return hash.startsWith("#/youtube") ? "youtube" : "loopsync";
+}
+
 export default function App() {
+  const [area, setArea] = useState(areaFromHash); // loopsync | youtube
+  // A área YouTube continua montada (oculta) depois da primeira visita: assim a
+  // fila de vídeos, os metadados em edição e os uploads em andamento não se
+  // perdem quando o usuário volta para o LoopSync.
+  const [youtubeMounted, setYoutubeMounted] = useState(areaFromHash === "youtube");
+  const [incomingVideo, setIncomingVideo] = useState(null);
   const [screen, setScreen] = useState("form"); // form | processing | result
   const [videoFile, setVideoFile] = useState(null);
   const [audioFile, setAudioFile] = useState(null);
@@ -185,6 +198,60 @@ export default function App() {
     clearTimeout(toastTimerRef.current);
     toastTimerRef.current = setTimeout(() => setToast(null), 3600);
   }, []);
+
+  useEffect(() => {
+    if (area === "youtube") setYoutubeMounted(true);
+  }, [area]);
+
+  const navigate = useCallback((next) => {
+    setArea(next);
+    const target = next === "youtube" ? "#/youtube" : "#/";
+    if (window.location.hash !== target) {
+      window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}${target}`);
+    }
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }, []);
+
+  useEffect(() => {
+    const onHashChange = () => setArea(areaFromHash());
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
+
+  /** Leva o MP4 gerado pelo LoopSync direto para o upload do YouTube. */
+  const sendToYouTube = useCallback(async () => {
+    if (!result) return;
+    const downloadUrl = String(result.downloadUrl || "");
+    const isServerResult = downloadUrl.startsWith("/api/result/");
+    const parsedJobId = isServerResult ? downloadUrl.split("/").pop().split("?")[0] : null;
+    const jobId = jobIdRef.current || parsedJobId;
+
+    if (isServerResult && jobId) {
+      setIncomingVideo({
+        sourceJobId: jobId,
+        name: result.fileName || `LoopSync_${timestampName()}.mp4`,
+        size: Number(result.sizeBytes || 0),
+        previewUrl: result.previewUrl,
+        title: "",
+      });
+      navigate("youtube");
+      return;
+    }
+
+    // Modo navegador (ffmpeg.wasm): o resultado é um Blob local.
+    try {
+      const response = await fetch(downloadUrl);
+      if (!response.ok) throw new Error("blob");
+      const blob = await response.blob();
+      const fileName = result.fileName || `LoopSync_${timestampName()}.mp4`;
+      const file = new File([blob], fileName, { type: blob.type || "video/mp4" });
+      setIncomingVideo({ file, name: fileName, size: blob.size, title: "" });
+      navigate("youtube");
+    } catch {
+      showToast("Não foi possível levar este vídeo para o YouTube. Salve o arquivo e selecione-o na aba YouTube.", "error");
+      navigate("youtube");
+    }
+  }, [navigate, result, showToast]);
 
   const videoRef = useRef(null);
   const audioRef = useRef(null);
@@ -485,6 +552,38 @@ export default function App() {
         </span>
       </header>
 
+      <nav className="app-nav" aria-label="Áreas do LoopSync">
+        <button
+          type="button"
+          className={`nav-pill${area === "loopsync" ? " active" : ""}`}
+          data-testid="nav-loopsync"
+          onClick={() => navigate("loopsync")}
+          aria-current={area === "loopsync" ? "page" : undefined}
+        >
+          <span aria-hidden="true">🎬</span> LoopSync
+        </button>
+        <button
+          type="button"
+          className={`nav-pill${area === "youtube" ? " active" : ""}`}
+          data-testid="nav-youtube"
+          onClick={() => navigate("youtube")}
+          aria-current={area === "youtube" ? "page" : undefined}
+        >
+          <span aria-hidden="true">▶</span> YouTube
+        </button>
+      </nav>
+
+      {youtubeMounted ? (
+        <div className="area-panel" data-testid="area-youtube" hidden={area !== "youtube"}>
+          <YouTube
+            showToast={showToast}
+            incomingVideo={incomingVideo}
+            onIncomingConsumed={() => setIncomingVideo(null)}
+          />
+        </div>
+      ) : null}
+
+      <div className="area-panel" data-testid="area-loopsync" hidden={area === "youtube"}>
       <AnimatePresence mode="wait">
         {/* ─── FORM SCREEN ─── */}
         {screen === "form" && (
@@ -675,6 +774,9 @@ export default function App() {
             >
               <a className="btn primary" id="saveBtn" href={result.downloadUrl} download={result.fileName || "LoopSync.mp4"} whileTap={{ scale: 0.97 }}>Salvar vídeo</a>
               <button type="button" className="btn subtle" id="shareBtn" onClick={shareResult} whileTap={{ scale: 0.97 }}>Compartilhar</button>
+              <button type="button" className="btn youtube" id="sendToYouTubeBtn" onClick={sendToYouTube} whileTap={{ scale: 0.97 }}>
+                <span className="yt-mark" aria-hidden="true">▶</span> Enviar para o YouTube
+              </button>
               <button type="button" className="btn ghost" id="resetBtn" onClick={resetAll} whileTap={{ scale: 0.97 }}>Criar outro</button>
             </motion.div>
             <p className="hint" id="resultMeta">
@@ -683,6 +785,7 @@ export default function App() {
           </motion.section>
         )}
       </AnimatePresence>
+      </div>
 
       {/* ── Toast ── */}
       <AnimatePresence>

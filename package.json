@@ -8,7 +8,11 @@
     "build": "node scripts/copy-wasm-vendor.js && vite build",
     "start": "node server.js",
     "test": "node scripts/validate.js",
-    "test:browser": "node scripts/test-browser.js"
+    "test:browser": "node scripts/test-browser.js",
+    "test:youtube": "node scripts/validate-youtube.js",
+    "test:youtube:ui": "node scripts/test-youtube-ui.js",
+    "test:youtube:browser": "node scripts/test-youtube-browser.js",
+    "test:all": "node scripts/validate.js && node scripts/validate-youtube.js && node scripts/test-youtube-ui.js"
   },
   "repository": {
     "type": "git",
@@ -39,6 +43,7 @@
   "devDependencies": {
     "@sparticuz/chromium": "^149.0.0",
     "@vitejs/plugin-react": "^4.3.4",
+    "jsdom": "^30.0.1",
     "puppeteer-core": "^25.9.0",
     "vite": "^6.0.0"
   }
