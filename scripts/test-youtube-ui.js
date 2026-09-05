@@ -595,6 +595,38 @@ async function main() {
     await waitFor(() => ui.qa(".yt-tag-text").some((el) => el.textContent === "electronic"), { label: "tags do conjunto" });
     check(true, "conjunto de tags aplicado ao vídeo (misturado às existentes)");
 
+    /* ── 7b. semântica do seletor de conjuntos ── */
+    const tagsBeforePicker = ui.qa(".yt-tag-text").map((el) => el.textContent);
+    check(Boolean(ui.q(".yt-modal")), '"Somar" mantém o seletor aberto para combinar conjuntos');
+    await ui.clickTestId("close-tagset-picker");
+    await waitFor(() => !ui.q(".yt-modal-backdrop"), { label: "seletor fechado" });
+    check(true, '"Fechar" encerra o seletor de tags salvas');
+
+    await ui.clickTestId("pick-tagset");
+    await waitFor(() => ui.byTestId(`replace-tagset-${setId2}`), { label: "seletor reaberto" });
+    await ui.click(ui.byTestId(`replace-tagset-${setId2}`));
+    await waitFor(() => !ui.q(".yt-modal-backdrop"), { label: "seletor fechado após substituir" });
+    const set2Tags = (await getTagSets()).items.find((entry) => entry.id === setId2).tags;
+    await waitFor(() => JSON.stringify(ui.qa(".yt-tag-text").map((el) => el.textContent)) === JSON.stringify(set2Tags), {
+      label: "tags substituídas",
+    });
+    check(true, `"Substituir" troca as tags do vídeo pelas do conjunto (${set2Tags.length}) e fecha o seletor`);
+
+    // devolve o estado anterior para o restante do fluxo não mudar
+    // ("Limpar tags" só existe quando há sugestões geradas)
+    let tagsLeft = ui.qa(".yt-tag").length;
+    for (let guard = 0; guard < 60 && tagsLeft > 0; guard += 1) {
+      const removeButtons = ui.qa('button[aria-label^="Remover "]');
+      if (!removeButtons.length) break;
+      await ui.click(removeButtons[removeButtons.length - 1]);
+      await waitFor(() => ui.qa(".yt-tag").length < tagsLeft, { label: "tag removida" });
+      tagsLeft = ui.qa(".yt-tag").length;
+    }
+    await waitFor(() => ui.qa(".yt-tag").length === 0, { label: "tags zeradas antes de restaurar" });
+    for (const tag of tagsBeforePicker) await addTag(tag);
+    await waitFor(() => ui.qa(".yt-tag-text").length === tagsBeforePicker.length, { label: "estado restaurado" });
+    check(true, "estado de tags restaurado depois de testar o seletor");
+
     const tagsBeforeSuggestion = ui.qa(".yt-tag").length;
     await ui.clickTestId("generate-suggestions");
     await waitFor(() => ui.q(".yt-suggestion:not([disabled])"), { label: "sugestões de tags" });

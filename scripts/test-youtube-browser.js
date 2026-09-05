@@ -381,6 +381,13 @@ async function main() {
     await page.waitForSelector(".yt-modal", { timeout: 20000 });
     const useTags = await page.$('[data-testid^="use-tagset-"]');
     await clickHandle(page, useTags, '[data-testid^="use-tagset-"]');
+    // "Somar" aplica as tags e mantém o seletor aberto para misturar conjuntos
+    await page.waitForFunction(
+      () => [...document.querySelectorAll(".yt-tag-text")].some((el) => el.textContent === "musica"),
+      { timeout: 20000 },
+    );
+    check(Boolean(await page.$(".yt-modal")), '"Somar" mantém o seletor aberto para combinar conjuntos');
+    await clickTestId(page, "close-tagset-picker");
     await page.waitForFunction(() => !document.querySelector(".yt-modal"), { timeout: 20000 });
     const tagsAfterSet = await page.$$eval(".yt-tag-text", (els) => els.map((el) => el.textContent));
     check(tagsAfterSet.includes("musica") && tagsAfterSet.includes("remix"), "tags do conjunto salvas carregadas e somadas");
@@ -410,10 +417,13 @@ async function main() {
     await page.waitForFunction(() => document.querySelectorAll(".yt-tag").length === 0, { timeout: 20000 });
     check(true, '"Limpar tags" remove todas as tags');
     await clickTestId(page, "pick-tagset");
-    await page.waitForSelector('[data-testid^="use-tagset-"]', { timeout: 20000 });
-    await clickSelector(page, '[data-testid^="use-tagset-"]');
-    await page.waitForFunction(() => document.querySelectorAll(".yt-tag").length >= 3, { timeout: 20000 });
-    check(true, "conjunto de tags recarregado depois de limpar");
+    await page.waitForSelector('[data-testid^="replace-tagset-"]', { timeout: 20000 });
+    await clickSelector(page, '[data-testid^="replace-tagset-"]');
+    await page.waitForFunction(
+      () => !document.querySelector(".yt-modal") && document.querySelectorAll(".yt-tag").length >= 3,
+      { timeout: 20000 },
+    );
+    check(true, '"Substituir" recarrega o conjunto depois de limpar e fecha o seletor');
 
     /* ── 8. editar / remover / reordenar tags ── */
     const firstTag = await page.$eval(".yt-tag-text", (el) => el.textContent);

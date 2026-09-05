@@ -1288,7 +1288,7 @@ export default function Uploader({ data, showToast, incomingVideo, onIncomingCon
         title="Usar descrição salva"
         description="O conteúdo é copiado para o vídeo — a descrição salva não é alterada."
         onClose={() => setModal(null)}
-        footer={<Button variant="ghost" onClick={() => setModal(null)}>Fechar</Button>}
+        footer={<Button variant="ghost" data-testid="close-description-picker" onClick={() => setModal(null)}>Fechar</Button>}
       >
         {descriptions.length ? (
           <ul className="yt-picker">
@@ -1320,7 +1320,7 @@ export default function Uploader({ data, showToast, incomingVideo, onIncomingCon
         )}
       </Modal>
 
-{active ?       <Modal
+{active ? <Modal
         open={modal && modal.type === "saveDescription"}
         title="Salvar descrição"
         description="Guarde esta descrição para usar em outros vídeos."
@@ -1366,7 +1366,7 @@ export default function Uploader({ data, showToast, incomingVideo, onIncomingCon
         title="Usar tags salvas"
         description="As tags são somadas às atuais. Você pode editar tudo antes do envio."
         onClose={() => setModal(null)}
-        footer={<Button variant="ghost" onClick={() => setModal(null)}>Fechar</Button>}
+        footer={<Button variant="ghost" data-testid="close-tagset-picker" onClick={() => setModal(null)}>Fechar</Button>}
       >
         {tagSets.length ? (
           <ul className="yt-picker">
@@ -1380,7 +1380,7 @@ export default function Uploader({ data, showToast, incomingVideo, onIncomingCon
                   </div>
                   <span className="yt-picker-actions">
                     <Button variant="subtle" size="sm" data-testid={`use-tagset-${tagSet.id}`} onClick={() => { applyTagSet(tagSet); }}>Somar</Button>
-                    <Button variant="ghost" size="sm" onClick={() => { applyTagSet(tagSet, { replace: true }); setModal(null); }}>Substituir</Button>
+                    <Button variant="ghost" size="sm" data-testid={`replace-tagset-${tagSet.id}`} onClick={() => { applyTagSet(tagSet, { replace: true }); setModal(null); }}>Substituir</Button>
                   </span>
                 </div>
               </li>

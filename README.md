@@ -166,7 +166,7 @@ final coincide com a do áudio.
 ```bash
 npm test                  # pipeline de mídia (ffmpeg): 5 cenários
 npm run test:youtube      # integração do módulo YouTube + API do Google: 41 verificações
-npm run test:youtube:ui   # interface React real em jsdom, fluxo completo: 122 verificações
+npm run test:youtube:ui   # interface React real em jsdom, fluxo completo: 129 verificações
 npm run test:youtube:browser  # E2E em Chromium (layout mobile/desktop + capturas)
 npm run test:all          # mídia + integração + interface
 ```

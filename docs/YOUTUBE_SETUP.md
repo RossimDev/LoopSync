@@ -394,7 +394,7 @@ Outros limites do YouTube:
 ```bash
 npm test                  # pipeline de mídia do LoopSync (ffmpeg) — 5 cenários
 npm run test:youtube      # integração backend + API do Google (mock) — 41 verificações
-npm run test:youtube:ui   # interface React real em jsdom, fluxo completo — 122 verificações
+npm run test:youtube:ui   # interface React real em jsdom, fluxo completo — 129 verificações
 npm run test:youtube:browser  # E2E em Chromium (Puppeteer) — layout e responsividade
 npm run test:all          # mídia + integração + interface
 ```
