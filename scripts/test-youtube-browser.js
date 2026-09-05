@@ -150,6 +150,26 @@ async function clickSelector(page, selector) {
   await clickHandle(page, handle, selector);
 }
 
+/**
+ * Lê os pares dt/dd de um <dl> pelo texto do DOM.
+ *
+ * Os rótulos usam `text-transform: uppercase` e `innerText` devolve o texto
+ * RENDERIZADO ("DURAÇÃO", "TOKEN VÁLIDO ATÉ") — foi o que fez as asserções do
+ * painel de conexão e dos metadados do arquivo falharem só no navegador.
+ */
+async function readDefinitionList(page, selector) {
+  return page.evaluate((sel) => {
+    const dl = document.querySelector(sel);
+    if (!dl) return null;
+    return Object.fromEntries(
+      [...dl.querySelectorAll("div")].map((row) => [
+        (row.querySelector("dt") || { textContent: "" }).textContent.trim(),
+        (row.querySelector("dd") || { textContent: "" }).textContent.trim(),
+      ]),
+    );
+  }, selector);
+}
+
 async function clickTestId(page, testId, { timeout = 20000 } = {}) {
   const selector = `[data-testid="${testId}"]`;
   await page.waitForSelector(selector, { visible: true, timeout });
@@ -268,13 +288,16 @@ async function main() {
 
     await clickTestId(page, "tab-connection");
     await page.waitForSelector(".yt-channel-avatar", { timeout: 8000 });
-    const channelInfo = await page.$eval(".yt-channel-info", (el) => el.innerText);
+    const channelInfo = (await readDefinitionList(page, ".yt-channel-info")) || {};
     check(
-      channelInfo.includes("Canal") && channelInfo.includes("Conta Google") && channelInfo.includes(channelName),
-      "painel de conexão mostra nome do canal, conta e status",
+      channelInfo["Canal"] === channelName && Boolean(channelInfo["Conta Google"]) && Boolean(channelInfo["Conectado em"]),
+      `painel de conexão mostra nome do canal, conta e status (${channelInfo["Canal"]} · ${channelInfo["Conta Google"]})`,
     );
     check(Boolean(await page.$(".yt-channel-avatar img")), "avatar do canal exibido");
-    check(channelInfo.includes("Token válido até"), "painel mostra validade do token (renovado automaticamente)");
+    check(
+      Boolean(channelInfo["Token válido até"]) && channelInfo["Token válido até"].includes("renovado automaticamente"),
+      `painel mostra validade do token (${channelInfo["Token válido até"]} · renovado automaticamente)`,
+    );
     check(Boolean(await page.$('[data-testid="disconnect-channel"]')), "opção de desconectar disponível");
     await screenshot(page, "02-conexao");
 
@@ -349,19 +372,7 @@ async function main() {
     await fileInput.uploadFile(path.join(assets, "video-e2e.mp4"));
     await page.waitForSelector(".yt-queue-item", { timeout: 15000 });
     await page.waitForFunction(() => document.body.innerText.includes("video-e2e.mp4"), { timeout: 10000 });
-    // `innerText` devolve o texto RENDERIZADO e os rótulos têm text-transform:
-    // uppercase — lemos os pares dt/dd pelo texto real e esperamos a sondagem
-    // assíncrona de duração terminar.
-    const readFileMeta = () =>
-      page.evaluate(() => {
-        const dl = document.querySelector(".yt-file-meta");
-        if (!dl) return null;
-        const rows = [...dl.querySelectorAll("div")].map((row) => [
-          (row.querySelector("dt") || { textContent: "" }).textContent.trim().toLowerCase(),
-          (row.querySelector("dd") || { textContent: "" }).textContent.trim(),
-        ]);
-        return Object.fromEntries(rows);
-      });
+    const readFileMeta = () => readDefinitionList(page, ".yt-file-meta");
     await page.waitForFunction(
       () => {
         const dl = document.querySelector(".yt-file-meta");
@@ -373,8 +384,8 @@ async function main() {
     );
     const fileMeta = (await readFileMeta()) || {};
     check(
-      Boolean(fileMeta.nome) && /\d/.test(fileMeta.tamanho || "") && /\d+:\d+/.test(fileMeta["duração"] || "") && Boolean(fileMeta.formato),
-      `dados do arquivo exibidos (nome="${fileMeta.nome}" · tamanho=${fileMeta.tamanho} · duração=${fileMeta["duração"]} · formato=${fileMeta.formato})`,
+      Boolean(fileMeta["Nome"]) && /\d/.test(fileMeta["Tamanho"] || "") && /\d+:\d+/.test(fileMeta["Duração"] || "") && Boolean(fileMeta["Formato"]),
+      `dados do arquivo exibidos (nome="${fileMeta["Nome"]}" · tamanho=${fileMeta["Tamanho"]} · duração=${fileMeta["Duração"]} · formato=${fileMeta["Formato"]})`,
     );
     await screenshot(page, "04-video-selecionado");
 
