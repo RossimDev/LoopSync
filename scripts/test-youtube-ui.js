@@ -21,7 +21,16 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { spawn } = require("child_process");
-const { JSDOM, VirtualConsole } = require("jsdom");
+let JSDOM;
+let VirtualConsole;
+try {
+  ({ JSDOM, VirtualConsole } = require("jsdom"));
+} catch (err) {
+  console.error("\nNão foi possível carregar o jsdom neste Node.", err.message);
+  console.error("O teste de interface exige Node 22 ou superior (jsdom 30 + undici).");
+  console.error(`Node em uso: ${process.version}`);
+  process.exit(2);
+}
 
 const { startMockGoogle } = require("./mock-google");
 
@@ -356,6 +365,15 @@ async function main() {
     check(true, "sem canal conectado: CTA de conexão visível");
     check(ui.bodyText().includes("Conecte seu canal para começar"), "área de upload bloqueada sem conexão");
     check(ui.byTestId("video-input") === null, "seletor de vídeo não aparece antes de conectar");
+
+    // mesmo caminho do E2E no navegador: o CTA precisa abrir o modal de conexão
+    await ui.clickTestId("connect-cta");
+    await waitFor(() => ui.q(".yt-modal"), { label: "modal de conexão" });
+    check(ui.q(".yt-modal").textContent.includes("Conectar canal do YouTube"), "modal de conexão abre ao clicar no CTA");
+    check(Boolean(ui.byTestId("connect-google-modal")), "modal tem o botão Conectar com o Google");
+    await ui.click(ui.q(".yt-modal-head .yt-icon-btn"));
+    await waitFor(() => !ui.q(".yt-modal-backdrop"), { label: "modal fechado" });
+    check(true, "modal de conexão pode ser fechado sem conectar");
 
     /* ── 2. OAuth completo (redirect + callback + cookie) ── */
     const oauth = await performOAuth(window, mock, server.base);

@@ -182,8 +182,9 @@ async function main() {
   const consoleErrors = [];
   const httpErrors = [];
 
+  let page = null;
   try {
-    const page = await browser.newPage();
+    page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 900, deviceScaleFactor: 1 });
     page.on("console", (msg) => {
       if (msg.type() === "error") consoleErrors.push(msg.text());
@@ -635,6 +636,30 @@ async function main() {
     check(relevantConsoleErrors.length === 0, `sem erros de console (${relevantConsoleErrors.slice(0, 3).join(" | ")})`);
     const relevantHttpErrors = httpErrors.filter((entry) => !/\/health|favicon/.test(entry));
     check(relevantHttpErrors.length === 0, `sem erros HTTP (${relevantHttpErrors.slice(0, 3).join(" | ")})`);
+  } catch (err) {
+    // Os logs do CI nem sempre estão acessíveis: despeja o estado da página.
+    try {
+      if (page) {
+        const text = await page.evaluate(() => document.body.innerText.slice(0, 1500));
+        console.log("\n── conteúdo visível da página no momento da falha ──");
+        console.log(text);
+        const markers = await page.evaluate(() => ({
+          modal: Boolean(document.querySelector(".yt-modal")),
+          backdrop: Boolean(document.querySelector(".yt-modal-backdrop")),
+          tabs: Boolean(document.querySelector(".yt-tabs")),
+          queue: document.querySelectorAll(".yt-queue-item").length,
+          testids: [...document.querySelectorAll("[data-testid]")].map((el) => el.getAttribute("data-testid")).slice(0, 40),
+        }));
+        console.log("── marcadores ──");
+        console.log(JSON.stringify(markers, null, 2));
+        if (consoleErrors.length) console.log("── erros de console ──\n" + consoleErrors.slice(0, 12).join("\n"));
+        if (httpErrors.length) console.log("── erros HTTP ──\n" + httpErrors.slice(0, 12).join("\n"));
+        await screenshot(page, "FALHA");
+      }
+    } catch (diagErr) {
+      console.log("(diagnóstico indisponível:", diagErr.message, ")");
+    }
+    throw err;
   } finally {
     await browser.close();
     await server.stop();

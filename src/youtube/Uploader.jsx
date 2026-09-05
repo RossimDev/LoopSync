@@ -733,14 +733,29 @@ export default function Uploader({ data, showToast, incomingVideo, onIncomingCon
   const canSend = Boolean(connected && active && !validateItem(active).length && !(active.upload && ["uploading", "processing"].includes(active.upload.status)));
   const sending = Boolean(active && active.upload && ["queued", "uploading"].includes(active.upload.status));
 
+  // O modal de conexão precisa existir também no estado desconectado: sem ele o
+  // clique em "Conectar canal do YouTube" mudava o estado e nada aparecia.
+  const connectModal = (
+    <Modal open={Boolean(modal && modal.type === "connect")} title="Conectar canal do YouTube" onClose={() => setModal(null)} size="sm">
+      <p className="yt-modal-text">Você será levado ao Google para autorizar o LoopSync a enviar vídeos para o seu canal.</p>
+      <div className="yt-actions">
+        <Button variant="ghost" onClick={() => setModal(null)}>Cancelar</Button>
+        <Button variant="primary" data-testid="connect-google-modal" onClick={() => actions.startConnection("/#/youtube")}>Conectar com o Google</Button>
+      </div>
+    </Modal>
+  );
+
   if (!connected) {
     return (
-      <EmptyState
-        icon="🔌"
-        title="Conecte seu canal para começar"
-        description="O envio para o YouTube só é liberado depois que você conecta um canal pela conta do Google."
-        action={<Button variant="primary" data-testid="connect-cta" onClick={() => setModal({ type: "connect" })}>Conectar canal do YouTube</Button>}
-      />
+      <>
+        <EmptyState
+          icon="🔌"
+          title="Conecte seu canal para começar"
+          description="O envio para o YouTube só é liberado depois que você conecta um canal pela conta do Google."
+          action={<Button variant="primary" data-testid="connect-cta" onClick={() => setModal({ type: "connect" })}>Conectar canal do YouTube</Button>}
+        />
+        {connectModal}
+      </>
     );
   }
 
@@ -1477,13 +1492,7 @@ export default function Uploader({ data, showToast, incomingVideo, onIncomingCon
         </ul>
       </Modal>
 
-      <Modal open={modal && modal.type === "connect"} title="Conectar canal do YouTube" onClose={() => setModal(null)} size="sm">
-        <p className="yt-modal-text">Você será levado ao Google para autorizar o LoopSync a enviar vídeos para o seu canal.</p>
-        <div className="yt-actions">
-          <Button variant="ghost" onClick={() => setModal(null)}>Cancelar</Button>
-          <Button variant="primary" data-testid="connect-google-modal" onClick={() => actions.startConnection("/#/youtube")}>Conectar com o Google</Button>
-        </div>
-      </Modal>
+      {connectModal}
 
       <ConfirmDialog
         open={Boolean(confirmState)}

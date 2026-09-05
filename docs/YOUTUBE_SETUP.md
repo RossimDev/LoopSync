@@ -35,7 +35,7 @@ usado exclusivamente pelos testes automatizados.
 
 | Item | Detalhe |
 | --- | --- |
-| Node.js | 18 ou superior (recomendado 20+) — usa `fetch` nativo |
+| Node.js | 18 ou superior para rodar o app (usa `fetch` nativo). Para os **testes de interface** (`npm run test:youtube:ui`) use **Node 22+** — o jsdom 30 não carrega no Node 20 |
 | Conta Google | com **um canal do YouTube já criado** (conta sem canal retorna `youtubeSignupRequired`) |
 | ffmpeg | já vem resolvido pelos pacotes `@ffmpeg-installer/ffmpeg` e `@ffprobe-installer/ffprobe` |
 | Servidor | o módulo YouTube **exige o backend do LoopSync** (`npm start`). Em hospedagem puramente estática (ex.: Vercel sem funções) a aba YouTube mostra as instruções de instalação |
