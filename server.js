@@ -10,9 +10,23 @@ const express = require("express");
 const multer = require("multer");
 
 const { generateSyncVideo, formatSeconds } = require("./lib/media");
+const { getStore } = require("./lib/store");
+const { createYouTubeRouter } = require("./lib/youtube/routes");
 
 const app = express();
+// Atrás de proxies (preview/HTTPS) os cabeçalhos X-Forwarded-* definem a URL pública.
+app.set("trust proxy", true);
+app.disable("x-powered-by");
 const PORT = Number(process.env.PORT || 3000);
+const HOST = process.env.HOST || "0.0.0.0";
+
+const youtubeConfiguredAtBoot = Boolean(
+  (process.env.GOOGLE_CLIENT_ID || process.env.GOOGLE_OAUTH_CLIENT_ID || "").trim() &&
+  (process.env.GOOGLE_CLIENT_SECRET || process.env.GOOGLE_OAUTH_CLIENT_SECRET || "").trim()
+);
+
+/** Banco local (arquivo JSON atômico) usado pelo módulo do YouTube. */
+const store = getStore({ dir: process.env.LOOPSYNC_DATA_DIR || path.join(__dirname, "data") });
 
 const UPLOAD_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), "loopsync-"));
 const MAX_UPLOAD_BYTES = Number(process.env.LOOPSYNC_MAX_UPLOAD_BYTES || 2 * 1024 * 1024 * 1024);
@@ -64,6 +78,29 @@ const upload = multer({
 });
 
 app.use(express.json({ limit: "1mb" }));
+
+/**
+ * Permite que o módulo YouTube envie diretamente o MP4 gerado pelo fluxo
+ * principal do LoopSync (o arquivo já está no servidor — nada de re-download
+ * e re-upload pelo navegador). O arquivo é mantido vivo enquanto o envio roda.
+ */
+function resolveLocalFile(jobId) {
+  const job = jobs.get(jobId);
+  if (!job || job.status !== "done" || !job.result) return null;
+  if (!fs.existsSync(job.outputPath)) return null;
+  const stat = fs.statSync(job.outputPath);
+  clearTimeout(job.timeout);
+  job.timeout = setTimeout(() => cleanupJob(job), Math.max(RESULT_RETENTION_MS, 3 * 60 * 60 * 1000));
+  return {
+    path: job.outputPath,
+    name: job.result.fileName || `LoopSync_${jobId}.mp4`,
+    size: stat.size,
+    mime: "video/mp4",
+  };
+}
+
+// ── Módulo YouTube (OAuth 2.0 + YouTube Data API v3 + uploads resumíveis) ──
+app.use("/api/youtube", createYouTubeRouter({ store, dataDir: store.dir, resolveLocalFile }));
 
 // In production, serve the Vite-built dist/ directory. In development, Vite's
 // dev server handles the frontend and proxies /api and /health here.
@@ -264,8 +301,18 @@ app.post("/api/clear/:id", (req, res) => {
   res.json({ ok: true });
 });
 
-app.get("/health", (_req, res) => {
-  res.json({ ok: true, service: "loopsync" });
+app.get("/health", (req, res) => {
+  const youtubeConfigured = Boolean(
+    (process.env.GOOGLE_CLIENT_ID || process.env.GOOGLE_OAUTH_CLIENT_ID || "").trim()
+  );
+  res.json({
+    ok: true,
+    service: "loopsync",
+    youtube: {
+      serverMode: true,
+      configured: youtubeConfigured,
+    },
+  });
 });
 
 // Convert multer/upload errors into a small JSON response and clean partial
@@ -284,6 +331,26 @@ app.use((err, req, res, _next) => {
   });
 });
 
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`LoopSync server listening on http://0.0.0.0:${PORT}`);
+const server = app.listen(PORT, HOST, () => {
+  const address = server.address() || {};
+  console.log(`LoopSync server listening on http://${HOST}:${address.port || PORT}`);
+  if (!youtubeConfiguredAtBoot) {
+    console.log("YouTube: credenciais Google ausentes — defina GOOGLE_CLIENT_ID e GOOGLE_CLIENT_SECRET (docs/YOUTUBE_SETUP.md).");
+  }
 });
+
+// Encerramento limpo: grava o banco local e libera a porta.
+function shutdown(signal) {
+  console.log(`\nLoopSync: received ${signal}, shutting down.`);
+  Promise.resolve(store.flush())
+    .catch(() => {})
+    .finally(() => {
+      server.close(() => process.exit(0));
+      setTimeout(() => process.exit(0), 2000).unref();
+    });
+}
+
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
+
+module.exports = { app, store };

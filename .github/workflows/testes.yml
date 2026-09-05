@@ -1,0 +1,138 @@
+name: testes
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  testes:
+    name: LoopSync + YouTube
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Dependências
+        run: npm ci
+
+      - name: Build (Vite + ffmpeg.wasm em dist/vendor)
+        id: build
+        continue-on-error: true
+        run: |
+          set +e
+          npm run build 2>&1 | tee /tmp/build.log
+          exit ${PIPESTATUS[0]}
+
+      - name: Pipeline de mídia (ffmpeg)
+        id: media
+        continue-on-error: true
+        run: |
+          set +e
+          npm test 2>&1 | tee /tmp/media.log
+          exit ${PIPESTATUS[0]}
+
+      - name: Módulo YouTube — integração + API
+        id: api
+        continue-on-error: true
+        run: |
+          set +e
+          npm run test:youtube 2>&1 | tee /tmp/api.log
+          exit ${PIPESTATUS[0]}
+
+      - name: Módulo YouTube — interface (jsdom)
+        id: ui
+        continue-on-error: true
+        run: |
+          set +e
+          npm run test:youtube:ui 2>&1 | tee /tmp/ui.log
+          exit ${PIPESTATUS[0]}
+
+      - name: Módulo YouTube — E2E no Chromium (desktop, tablet e celular)
+        id: e2e
+        continue-on-error: true
+        env:
+          SCREENSHOTS: ${{ github.workspace }}/screenshots
+        run: |
+          set +e
+          npm run test:youtube:browser 2>&1 | tee /tmp/e2e.log
+          code=${PIPESTATUS[0]}
+          # código 2 = Chromium indisponível no runner: não é falha do produto
+          if [ "$code" = "2" ]; then
+            echo "Chromium indisponível — E2E ignorado (a suíte em jsdom cobre a mesma jornada)."
+            exit 0
+          fi
+          exit $code
+
+      - name: Capturas de tela do E2E
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots-youtube
+          path: screenshots/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      # Os logs completos ficam em blob storage; este passo publica o resumo e as
+      # últimas linhas de cada suíte como comentário no PR para diagnóstico.
+      - name: Diagnóstico das suítes
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          OUT_BUILD: ${{ steps.build.outcome }}
+          OUT_MEDIA: ${{ steps.media.outcome }}
+          OUT_API: ${{ steps.api.outcome }}
+          OUT_UI: ${{ steps.ui.outcome }}
+          OUT_E2E: ${{ steps.e2e.outcome }}
+        run: |
+          body=/tmp/diagnostico.md
+          {
+            echo "### Resultado das suítes"
+            echo ""
+            echo "| Suíte | Comando | Resultado |"
+            echo "| --- | --- | --- |"
+            echo "| Build | \`npm run build\` | $OUT_BUILD |"
+            echo "| Mídia (ffmpeg) | \`npm test\` | $OUT_MEDIA |"
+            echo "| YouTube — integração | \`npm run test:youtube\` | $OUT_API |"
+            echo "| YouTube — interface (jsdom) | \`npm run test:youtube:ui\` | $OUT_UI |"
+            echo "| YouTube — E2E Chromium | \`npm run test:youtube:browser\` | $OUT_E2E |"
+          } > "$body"
+
+          for pair in "Build:/tmp/build.log" "Mídia:/tmp/media.log" "Integração:/tmp/api.log" "Interface (jsdom):/tmp/ui.log" "E2E Chromium:/tmp/e2e.log"; do
+            name="${pair%%:*}"
+            log="${pair#*:}"
+            if [ -f "$log" ]; then
+              {
+                echo ""
+                echo "<details><summary>últimas linhas — $name</summary>"
+                echo ""
+                echo '```text'
+                tail -n 140 "$log"
+                echo '```'
+                echo ""
+                echo "</details>"
+              } >> "$body"
+            fi
+          done
+
+          if [ "$OUT_BUILD$OUT_MEDIA$OUT_API$OUT_UI$OUT_E2E" != "successsuccesssuccesssuccesssuccess" ]; then
+            if [ -n "$PR_NUMBER" ]; then
+              gh pr comment "$PR_NUMBER" --body-file "$body" || echo "não foi possível comentar no PR"
+            else
+              cat "$body"
+            fi
+            exit 1
+          fi
+          echo "Todas as suítes passaram."

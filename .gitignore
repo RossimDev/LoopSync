@@ -4,3 +4,16 @@ tmp-test-assets/
 *.log
 .DS_Store
 static/vendor/
+
+# banco local do módulo YouTube (conexões, descrições, tags, histórico)
+data/
+*.store.json
+
+# segredos / variáveis de ambiente
+.env
+.env.*
+!.env.example
+
+# artefatos de teste
+tmp-test-assets/
+screenshots/
