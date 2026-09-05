@@ -107,6 +107,43 @@ async function screenshot(page, name) {
   console.log(`    📸 ${file}`);
 }
 
+/**
+ * Clica no centro do elemento como um usuário faria.
+ *
+ * Em navegador real o clique pode ser engolido por outra coisa: backdrop de um
+ * modal que ainda está saindo de cena, cabeçalho fixo por cima do botão ou
+ * deslocamento de layout causado pelas animações (`motion.li layout`). Quando o
+ * elemento no ponto clicado não é o alvo, registramos o que estava por cima e
+ * usamos `el.click()` para o fluxo não travar.
+ */
+async function clickSelector(page, selector) {
+  await page.evaluate((sel) => {
+    const el = document.querySelector(sel);
+    if (el) el.scrollIntoView({ block: "center", inline: "center" });
+  }, selector);
+  await new Promise((resolve) => setTimeout(resolve, 180));
+
+  const probe = await page.evaluate((sel) => {
+    const el = document.querySelector(sel);
+    if (!el) return { state: "ausente" };
+    const box = el.getBoundingClientRect();
+    const x = box.left + box.width / 2;
+    const y = box.top + box.height / 2;
+    const top = document.elementFromPoint(x, y);
+    if (top === el || (top && el.contains(top))) return { state: "livre" };
+    const describe = (node) =>
+      node ? `${node.tagName.toLowerCase()}${node.id ? `#${node.id}` : ""}${node.className ? `.${String(node.className).trim().split(/\s+/).join(".")}` : ""}` : "nada";
+    return { state: "coberto", by: describe(top), x: Math.round(x), y: Math.round(y) };
+  }, selector);
+
+  if (probe.state === "livre") {
+    await page.click(selector);
+    return;
+  }
+  console.log(`    ⚠ ${selector} ${probe.state === "ausente" ? "desapareceu" : `coberto por ${probe.by}`} — clique via DOM`);
+  await page.$eval(selector, (el) => el.click());
+}
+
 async function clickTestId(page, testId, { timeout = 20000 } = {}) {
   const selector = `[data-testid="${testId}"]`;
   await page.waitForSelector(selector, { visible: true, timeout });
@@ -119,7 +156,7 @@ async function clickTestId(page, testId, { timeout = 20000 } = {}) {
     { timeout },
     selector,
   );
-  await page.click(selector);
+  await clickSelector(page, selector);
 }
 
 /**
@@ -241,11 +278,13 @@ async function main() {
     await clickTestId(page, "new-description");
     await page.waitForSelector("#libDescName", { timeout: 20000 });
     await page.type("#libDescName", "Descrição E2E");
-    await page.click("#libDescContent");
+    await clickSelector(page, "#libDescContent");
     await page.type("#libDescContent", "Descrição original salva no E2E.\n\n#loopsync");
     await clickTestId(page, "save-description-library");
     await page.waitForFunction(() => document.body.innerText.includes("Descrição E2E"), { timeout: 8000 });
     check(true, "descrição salva criada na biblioteca");
+    // o backdrop do modal que fechou ainda cobre a tela por uns instantes
+    await page.waitForFunction(() => !document.querySelector("#libDescName"), { timeout: 20000 });
 
     await clickTestId(page, "new-tagset");
     await page.waitForSelector("#libTagName", { timeout: 20000 });
@@ -327,7 +366,7 @@ async function main() {
     await page.waitForFunction(() => document.getElementById("ytDescription").value.includes("Descrição original salva no E2E"), { timeout: 20000 });
     check(true, "descrição salva carregada no campo de descrição");
 
-    await page.click("#ytDescription");
+    await clickSelector(page, "#ytDescription");
     await page.keyboard.press("End");
     await page.type("#ytDescription", "\n\nEditado apenas neste envio.");
     const editedDescription = await page.$eval("#ytDescription", (el) => el.value);
@@ -348,7 +387,7 @@ async function main() {
     const suggestionTexts = await page.$$eval(".yt-suggestion:not([disabled]) span", (els) => els.map((el) => el.textContent.trim()));
     check(suggestionTexts.length >= 3, `sugestões de tags geradas (${suggestionTexts.length})`);
     const beforeCount = await page.$$eval(".yt-tag", (els) => els.length);
-    await page.click(".yt-suggestion:not([disabled])");
+    await clickSelector(page, ".yt-suggestion:not([disabled])");
     await page.waitForFunction(
       (previous) => document.querySelectorAll(".yt-tag").length > previous,
       { timeout: 20000 },
@@ -369,7 +408,7 @@ async function main() {
     check(true, '"Limpar tags" remove todas as tags');
     await clickTestId(page, "pick-tagset");
     await page.waitForSelector('[data-testid^="use-tagset-"]', { timeout: 20000 });
-    await page.click('[data-testid^="use-tagset-"]');
+    await clickSelector(page, '[data-testid^="use-tagset-"]');
     await page.waitForFunction(() => document.querySelectorAll(".yt-tag").length >= 3, { timeout: 20000 });
     check(true, "conjunto de tags recarregado depois de limpar");
 
@@ -542,7 +581,7 @@ async function main() {
       els.map((el, index) => ({ index, text: el.innerText })),
     );
     const targetIndex = secondItem.find((item) => !/Concluído/.test(item.text)).index;
-    await page.click(`.yt-queue-item:nth-of-type(${targetIndex + 1}) [data-testid^="queue-select-"]`);
+    await clickSelector(page, `.yt-queue-item:nth-of-type(${targetIndex + 1}) [data-testid^="queue-select-"]`);
     await page.waitForFunction(
       (expected) => document.getElementById("ytDescription").value === expected,
       { timeout: 8000 },
@@ -619,14 +658,14 @@ async function main() {
       const btn = document.getElementById("generateBtn");
       return btn && !btn.disabled;
     }, { timeout: 20000 });
-    await page.click("#generateBtn");
+    await clickSelector(page, "#generateBtn");
     await page.waitForSelector("#resultPanel", { timeout: 90000 });
     const resultDuration = await textOf(page, "#resultDuration");
     check(resultDuration === "00:08", `LoopSync continua gerando o vídeo (duração ${resultDuration})`);
     check(Boolean(await page.$("#sendToYouTubeBtn")), "botão 'Enviar para o YouTube' no resultado do LoopSync");
 
     /* ── 18. levar o resultado direto para o YouTube ── */
-    await page.click("#sendToYouTubeBtn");
+    await clickSelector(page, "#sendToYouTubeBtn");
     await page.waitForSelector(".yt-queue-item", { timeout: 20000 });
     await page.waitForFunction(() => document.body.innerText.includes("Gerado no LoopSync"), { timeout: 15000 });
     check(true, "resultado do LoopSync enviado para a fila do YouTube sem re-download");
