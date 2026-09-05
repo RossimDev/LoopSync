@@ -119,7 +119,7 @@ jobs:
                 echo "<details><summary>últimas linhas — $name</summary>"
                 echo ""
                 echo '```text'
-                tail -n 90 "$log"
+                tail -n 140 "$log"
                 echo '```'
                 echo ""
                 echo "</details>"

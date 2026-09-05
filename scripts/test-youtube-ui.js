@@ -40,6 +40,8 @@ const CLIENT_SECRET = "GOCSPX-ui-test-secret";
 
 let checks = 0;
 let failures = 0;
+/** Rótulos das verificações que falharam — impressos no resumo final. */
+const failedMessages = [];
 
 const CI = process.env.GITHUB_ACTIONS === "true";
 
@@ -47,6 +49,7 @@ function check(condition, message) {
   checks += 1;
   if (!condition) {
     failures += 1;
+    failedMessages.push(message);
     console.log(`  ✗ ${message}`);
     if (CI) console.log(`::error::${message}`);
     return false;
@@ -975,6 +978,8 @@ async function main() {
 
   console.log(`\n${checks - failures}/${checks} verificações de interface passaram.`);
   if (failures) {
+    console.log(`\nResumo das ${failures} falha(s):`);
+    failedMessages.forEach((message, index) => console.log(`  ${index + 1}. ${message}`));
     console.log("\nLogs do servidor (últimas linhas):");
     console.log(server.logs().split("\n").slice(-30).join("\n"));
     process.exit(1);
