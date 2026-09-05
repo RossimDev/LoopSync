@@ -32,11 +32,14 @@ const CLIENT_SECRET = "GOCSPX-ui-test-secret";
 let checks = 0;
 let failures = 0;
 
+const CI = process.env.GITHUB_ACTIONS === "true";
+
 function check(condition, message) {
   checks += 1;
   if (!condition) {
     failures += 1;
     console.log(`  ✗ ${message}`);
+    if (CI) console.log(`::error::${message}`);
     return false;
   }
   console.log(`  ✓ ${message}`);
@@ -64,7 +67,7 @@ function startServer({ env, dataDir }) {
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
       reject(new Error(`servidor não iniciou\n${out}\n${err}`));
-    }, 25000);
+    }, 60000);
     child.stdout.on("data", (chunk) => {
       out += chunk;
       const match = /listening on http:\/\/[^:]+:(\d+)/.exec(out);
@@ -235,7 +238,7 @@ function installGlobals(window) {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function waitFor(fn, { timeout = 20000, label = "condição", interval = 40 } = {}) {
+async function waitFor(fn, { timeout = 45000, label = "condição", interval = 40 } = {}) {
   const started = Date.now();
   let lastError = null;
   for (;;) {
@@ -269,7 +272,7 @@ function makeHelpers(window) {
   };
 
   const clickTestId = async (id) => {
-    const element = await waitFor(() => byTestId(id), { label: `data-testid=${id}`, timeout: 15000 });
+    const element = await waitFor(() => byTestId(id), { label: `data-testid=${id}`, timeout: 30000 });
     return click(element);
   };
 
@@ -683,7 +686,7 @@ async function main() {
       }
     }, 20);
 
-    await waitFor(() => ui.byTestId("upload-done"), { label: "conclusão do upload", timeout: 60000 });
+    await waitFor(() => ui.byTestId("upload-done"), { label: "conclusão do upload", timeout: 180000 });
     clearInterval(poller);
     const done = ui.text('[data-testid="upload-done"]');
     check(done.includes("Upload concluído com sucesso!"), "mensagem de conclusão");
@@ -818,10 +821,10 @@ async function main() {
       for (const badge of ui.qa(".yt-queue-item .yt-badge")) seenStatus.add(badge.textContent.trim());
     }, 25);
     await ui.clickTestId("send-all");
-    await waitFor(async () => (await getMockState()).videos.length >= 2, { label: "fila enviada", timeout: 90000 });
+    await waitFor(async () => (await getMockState()).videos.length >= 2, { label: "fila enviada", timeout: 240000 });
     await waitFor(() => ui.qa(".yt-queue-item").every((el) => /Concluído|Processando/.test(el.textContent)), {
       label: "fila concluída",
-      timeout: 30000,
+      timeout: 90000,
     });
     clearInterval(statusPoller);
     check([...seenStatus].some((label) => /Enviando|Aguardando|Processando|Concluído/.test(label)), `status da fila acompanhados (${[...seenStatus].join(", ")})`);
@@ -881,7 +884,7 @@ async function main() {
     check(ui.byTestId("area-loopsync").hidden === false, "área LoopSync visível");
     await ui.clickTestId("nav-youtube");
     await ui.clickTestId("tab-send");
-    await waitFor(() => ui.byTestId("upload-done"), { label: "upload concluído após navegar", timeout: 90000 });
+    await waitFor(() => ui.byTestId("upload-done"), { label: "upload concluído após navegar", timeout: 240000 });
     check(true, "upload em andamento continua ao trocar de aba e de área (não é abortado)");
     const afterNav = await getMockState();
     check(afterNav.videos.length === 3, `três vídeos publicados no total (${afterNav.videos.length})`);

@@ -55,6 +55,9 @@ async function test(name, fn) {
   } catch (err) {
     results.push({ label, ok: false, error: err.message });
     process.stdout.write(`  ✗ ${label}\n      → ${err.message}\n`);
+    if (process.env.GITHUB_ACTIONS === "true") {
+      process.stdout.write(`::error::${label} — ${String(err.message).split("\n")[0]}\n`);
+    }
   }
 }
 

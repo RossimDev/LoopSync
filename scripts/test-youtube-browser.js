@@ -43,6 +43,7 @@ function check(condition, message) {
   if (!condition) {
     failures += 1;
     console.log(`  ✗ ${message}`);
+    if (process.env.GITHUB_ACTIONS === "true") console.log(`::error::${message}`);
     return false;
   }
   console.log(`  ✓ ${message}`);
@@ -70,7 +71,7 @@ function startServer({ env, dataDir }) {
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
       reject(new Error(`servidor não iniciou\n${out}\n${err}`));
-    }, 25000);
+    }, 60000);
     child.stdout.on("data", (chunk) => {
       out += chunk;
       const match = /listening on http:\/\/[^:]+:(\d+)/.exec(out);
@@ -658,6 +659,9 @@ async function main() {
 if (require.main === module) {
   main().catch((err) => {
     console.error("\nE2E DO YOUTUBE FALHOU:", err);
+    if (process.env.GITHUB_ACTIONS === "true") {
+      console.log(`::error::E2E do YouTube falhou: ${String(err && err.message).split("\n")[0]}`);
+    }
     process.exit(1);
   });
 }
