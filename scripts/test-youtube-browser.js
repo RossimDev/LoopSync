@@ -324,6 +324,7 @@ async function main() {
     await page.type("#libDescName", "Descrição editada no E2E");
     await clickTestId(page, "save-description-library");
     await page.waitForFunction(() => document.body.innerText.includes("Descrição editada no E2E"), { timeout: 8000 });
+    await page.waitForFunction(() => !document.querySelector("#libDescName"), { timeout: 20000 });
     check(true, "descrição editada na biblioteca");
 
     await clickTestId(page, `library-delete-description-${copied.id}`);
@@ -345,8 +346,33 @@ async function main() {
     await fileInput.uploadFile(path.join(assets, "video-e2e.mp4"));
     await page.waitForSelector(".yt-queue-item", { timeout: 15000 });
     await page.waitForFunction(() => document.body.innerText.includes("video-e2e.mp4"), { timeout: 10000 });
-    const fileInfo = await page.$eval(".yt-file-meta", (el) => el.innerText);
-    check(/Tamanho/.test(fileInfo) && /Duração/.test(fileInfo) && /Formato/.test(fileInfo), "dados do arquivo exibidos (nome, tamanho, duração, formato)");
+    // `innerText` devolve o texto RENDERIZADO e os rótulos têm text-transform:
+    // uppercase — lemos os pares dt/dd pelo texto real e esperamos a sondagem
+    // assíncrona de duração terminar.
+    const readFileMeta = () =>
+      page.evaluate(() => {
+        const dl = document.querySelector(".yt-file-meta");
+        if (!dl) return null;
+        const rows = [...dl.querySelectorAll("div")].map((row) => [
+          (row.querySelector("dt") || { textContent: "" }).textContent.trim().toLowerCase(),
+          (row.querySelector("dd") || { textContent: "" }).textContent.trim(),
+        ]);
+        return Object.fromEntries(rows);
+      });
+    await page.waitForFunction(
+      () => {
+        const dl = document.querySelector(".yt-file-meta");
+        if (!dl) return false;
+        const row = [...dl.querySelectorAll("div")].find((item) => (item.querySelector("dt") || {}).textContent === "Duração");
+        return Boolean(row) && /\d/.test((row.querySelector("dd") || { textContent: "" }).textContent);
+      },
+      { timeout: 20000 },
+    );
+    const fileMeta = (await readFileMeta()) || {};
+    check(
+      Boolean(fileMeta.nome) && /\d/.test(fileMeta.tamanho || "") && /\d+:\d+/.test(fileMeta["duração"] || "") && Boolean(fileMeta.formato),
+      `dados do arquivo exibidos (nome="${fileMeta.nome}" · tamanho=${fileMeta.tamanho} · duração=${fileMeta["duração"]} · formato=${fileMeta.formato})`,
+    );
     await screenshot(page, "04-video-selecionado");
 
     /* ── 5. aplicar template ── */
@@ -374,7 +400,13 @@ async function main() {
     await page.type("#ytDescription", "\n\nEditado apenas neste envio.");
     const editedDescription = await page.$eval("#ytDescription", (el) => el.value);
     check(editedDescription.includes("Editado apenas neste envio"), "descrição editada livremente depois de carregada");
-    check(await page.$eval(".yt-section-aside .yt-badge", (el) => el.textContent).then((t) => t.includes("editada")), "badge indica descrição salva editada");
+    const descriptionBadge = await page.evaluate(() => {
+      const field = document.getElementById("ytDescription");
+      const section = field && field.closest(".yt-section");
+      const badge = section && section.querySelector(".yt-section-aside .yt-badge");
+      return badge ? badge.textContent.trim() : "(sem badge na seção de descrição)";
+    });
+    check(descriptionBadge.includes("editada"), `badge indica descrição salva editada ("${descriptionBadge}")`);
 
     /* ── 7. usar tags salvas + sugestões ── */
     await clickTestId(page, "pick-tagset");
@@ -440,10 +472,22 @@ async function main() {
     );
     check(true, `tag editada (antes: "${firstTag}")`);
 
-    const moveButton = await page.$(".yt-tag .yt-tag-tools button:nth-child(2)");
-    await clickHandle(page, moveButton, "botão mover tag");
+    const orderBeforeMove = await page.$$eval(".yt-tag-text", (els) => els.map((el) => el.textContent));
+    const tagToMove = orderBeforeMove[0];
+    const moveHandle = await page.evaluateHandle((tag) => {
+      const label = `Mover ${tag} para frente`;
+      return [...document.querySelectorAll(".yt-tag .yt-tag-tools button")].find((el) => el.getAttribute("aria-label") === label) || null;
+    }, tagToMove);
+    const moveButton = moveHandle.asElement();
+    if (!moveButton) throw new Error(`botão de mover não encontrado para a tag "${tagToMove}"`);
+    await clickHandle(page, moveButton, `mover "${tagToMove}" para frente`);
+    await page.waitForFunction(
+      ({ tag, from }) => [...document.querySelectorAll(".yt-tag-text")].map((el) => el.textContent).indexOf(tag) === from + 1,
+      { timeout: 20000 },
+      { tag: tagToMove, from: 0 },
+    );
     const orderAfterMove = await page.$$eval(".yt-tag-text", (els) => els.map((el) => el.textContent));
-    check(orderAfterMove[1] === "tag-editada-e2e", "tag reordenada com as setas");
+    check(orderAfterMove[1] === tagToMove && orderAfterMove[0] === orderBeforeMove[1], `tag reordenada com as setas ("${tagToMove}" → posição 2)`);
 
     const removeButtons = await page.$$(".yt-tag .yt-tag-tools button:nth-child(4)");
     const countBeforeRemove = await page.$$eval(".yt-tag", (els) => els.length);
