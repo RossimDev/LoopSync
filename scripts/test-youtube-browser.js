@@ -116,32 +116,35 @@ async function screenshot(page, name) {
  * elemento no ponto clicado não é o alvo, registramos o que estava por cima e
  * usamos `el.click()` para o fluxo não travar.
  */
-async function clickSelector(page, selector) {
-  await page.evaluate((sel) => {
-    const el = document.querySelector(sel);
-    if (el) el.scrollIntoView({ block: "center", inline: "center" });
-  }, selector);
+async function clickHandle(page, handle, label = "elemento") {
+  await handle.evaluate((el) => el.scrollIntoView({ block: "center", inline: "center" }));
   await new Promise((resolve) => setTimeout(resolve, 180));
 
-  const probe = await page.evaluate((sel) => {
-    const el = document.querySelector(sel);
-    if (!el) return { state: "ausente" };
+  const probe = await handle.evaluate((el) => {
     const box = el.getBoundingClientRect();
     const x = box.left + box.width / 2;
     const y = box.top + box.height / 2;
     const top = document.elementFromPoint(x, y);
     if (top === el || (top && el.contains(top))) return { state: "livre" };
     const describe = (node) =>
-      node ? `${node.tagName.toLowerCase()}${node.id ? `#${node.id}` : ""}${node.className ? `.${String(node.className).trim().split(/\s+/).join(".")}` : ""}` : "nada";
-    return { state: "coberto", by: describe(top), x: Math.round(x), y: Math.round(y) };
-  }, selector);
+      node
+        ? `${node.tagName.toLowerCase()}${node.id ? `#${node.id}` : ""}${node.className ? `.${String(node.className).trim().split(/\s+/).join(".")}` : ""}`
+        : "nada";
+    return { state: "coberto", by: describe(top) };
+  });
 
   if (probe.state === "livre") {
-    await page.click(selector);
+    await handle.click();
     return;
   }
-  console.log(`    ⚠ ${selector} ${probe.state === "ausente" ? "desapareceu" : `coberto por ${probe.by}`} — clique via DOM`);
-  await page.$eval(selector, (el) => el.click());
+  console.log(`    ⚠ ${label} coberto por ${probe.by} — clique via DOM`);
+  await handle.evaluate((el) => el.click());
+}
+
+async function clickSelector(page, selector) {
+  const handle = await page.$(selector);
+  if (!handle) throw new Error(`elemento para clique não encontrado: ${selector}`);
+  await clickHandle(page, handle, selector);
 }
 
 async function clickTestId(page, testId, { timeout = 20000 } = {}) {
@@ -361,7 +364,7 @@ async function main() {
     await clickTestId(page, "pick-description");
     await page.waitForSelector(".yt-modal", { timeout: 20000 });
     const useButton = await page.$('[data-testid^="use-description-"]');
-    await useButton.click();
+    await clickHandle(page, useButton, '[data-testid^="use-description-"]');
     await page.waitForFunction(() => !document.querySelector(".yt-modal"), { timeout: 20000 });
     await page.waitForFunction(() => document.getElementById("ytDescription").value.includes("Descrição original salva no E2E"), { timeout: 20000 });
     check(true, "descrição salva carregada no campo de descrição");
@@ -377,7 +380,7 @@ async function main() {
     await clickTestId(page, "pick-tagset");
     await page.waitForSelector(".yt-modal", { timeout: 20000 });
     const useTags = await page.$('[data-testid^="use-tagset-"]');
-    await useTags.click();
+    await clickHandle(page, useTags, '[data-testid^="use-tagset-"]');
     await page.waitForFunction(() => !document.querySelector(".yt-modal"), { timeout: 20000 });
     const tagsAfterSet = await page.$$eval(".yt-tag-text", (els) => els.map((el) => el.textContent));
     check(tagsAfterSet.includes("musica") && tagsAfterSet.includes("remix"), "tags do conjunto salvas carregadas e somadas");
@@ -415,8 +418,8 @@ async function main() {
     /* ── 8. editar / remover / reordenar tags ── */
     const firstTag = await page.$eval(".yt-tag-text", (el) => el.textContent);
     const editButtons = await page.$$(".yt-tag .yt-tag-tools button:nth-child(3)");
-    await editButtons[0].click();
-    await page.waitForSelector(".yt-tag-input", { timeout: 3000 });
+    await clickHandle(page, editButtons[0], "botão editar tag");
+    await page.waitForSelector(".yt-tag-input", { timeout: 20000 });
     await clearField(page, ".yt-tag-input");
     await page.type(".yt-tag-input", "tag-editada-e2e");
     await page.keyboard.press("Enter");
@@ -428,13 +431,13 @@ async function main() {
     check(true, `tag editada (antes: "${firstTag}")`);
 
     const moveButton = await page.$(".yt-tag .yt-tag-tools button:nth-child(2)");
-    await moveButton.click();
+    await clickHandle(page, moveButton, "botão mover tag");
     const orderAfterMove = await page.$$eval(".yt-tag-text", (els) => els.map((el) => el.textContent));
     check(orderAfterMove[1] === "tag-editada-e2e", "tag reordenada com as setas");
 
     const removeButtons = await page.$$(".yt-tag .yt-tag-tools button:nth-child(4)");
     const countBeforeRemove = await page.$$eval(".yt-tag", (els) => els.length);
-    await removeButtons[removeButtons.length - 1].click();
+    await clickHandle(page, removeButtons[removeButtons.length - 1], "botão remover tag");
     await page.waitForFunction((before) => document.querySelectorAll(".yt-tag").length < before, { timeout: 20000 }, countBeforeRemove);
     check(true, "tag removida");
 
