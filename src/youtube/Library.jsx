@@ -86,7 +86,7 @@ export default function Library({ data, showToast, onUseDescription, onUseTagSet
         title="Descrições salvas"
         subtitle={`${descriptions.length} descrição(ões) · reutilize e edite antes de cada upload`}
         aside={
-          <Button variant="subtle" size="sm" icon="＋" data-testid="new-description" onClick={() => openDescription(null)} disabled={loading.descriptions}>
+          <Button variant="subtle" size="sm" icon="＋" data-testid="new-description" onClick={() => openDescription(null)}>
             Nova descrição
           </Button>
         }
@@ -161,7 +161,7 @@ export default function Library({ data, showToast, onUseDescription, onUseTagSet
         title="Tags salvas"
         subtitle={`${tagSets.length} conjunto(s) · carregue, misture e edite as tags antes do upload`}
         aside={
-          <Button variant="subtle" size="sm" icon="＋" data-testid="new-tagset" onClick={() => openTagSet(null)} disabled={loading.tagSets}>
+          <Button variant="subtle" size="sm" icon="＋" data-testid="new-tagset" onClick={() => openTagSet(null)}>
             Novo conjunto
           </Button>
         }

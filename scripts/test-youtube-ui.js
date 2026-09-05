@@ -282,7 +282,13 @@ function makeHelpers(window) {
 
   const clickTestId = async (id) => {
     const element = await waitFor(() => byTestId(id), { label: `data-testid=${id}`, timeout: 30000 });
-    return click(element);
+    // Um clique em botão desabilitado é silencioso: espere habilitar para que a
+    // falha apareça como "elemento desabilitado" e não como timeout confuso.
+    const enabled = await waitFor(() => (byTestId(id) && !byTestId(id).disabled ? byTestId(id) : null), {
+      label: `data-testid=${id} habilitado`,
+      timeout: 30000,
+    });
+    return click(enabled);
   };
 
   const setValue = async (element, value) => {

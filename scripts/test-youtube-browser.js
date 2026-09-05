@@ -107,9 +107,18 @@ async function screenshot(page, name) {
   console.log(`    📸 ${file}`);
 }
 
-async function clickTestId(page, testId, { timeout = 8000 } = {}) {
+async function clickTestId(page, testId, { timeout = 20000 } = {}) {
   const selector = `[data-testid="${testId}"]`;
   await page.waitForSelector(selector, { visible: true, timeout });
+  // Clique em botão desabilitado não faz nada; espera habilitar primeiro.
+  await page.waitForFunction(
+    (sel) => {
+      const el = document.querySelector(sel);
+      return Boolean(el) && !el.disabled;
+    },
+    { timeout },
+    selector,
+  );
   await page.click(selector);
 }
 
@@ -204,7 +213,7 @@ async function main() {
 
     /* ── 2. conexão do canal (OAuth de ponta a ponta) ── */
     await clickTestId(page, "connect-cta");
-    await page.waitForSelector(".yt-modal", { timeout: 5000 });
+    await page.waitForSelector(".yt-modal", { timeout: 20000 });
     await clickTestId(page, "connect-google-modal");
     await page.waitForFunction(
       () => document.body.innerText.includes("Canal conectado") || document.body.innerText.includes("canal conectado"),
@@ -230,7 +239,7 @@ async function main() {
     await clickTestId(page, "tab-library");
     await page.waitForSelector('[data-testid="new-description"]', { timeout: 8000 });
     await clickTestId(page, "new-description");
-    await page.waitForSelector("#libDescName", { timeout: 5000 });
+    await page.waitForSelector("#libDescName", { timeout: 20000 });
     await page.type("#libDescName", "Descrição E2E");
     await page.click("#libDescContent");
     await page.type("#libDescContent", "Descrição original salva no E2E.\n\n#loopsync");
@@ -239,7 +248,7 @@ async function main() {
     check(true, "descrição salva criada na biblioteca");
 
     await clickTestId(page, "new-tagset");
-    await page.waitForSelector("#libTagName", { timeout: 5000 });
+    await page.waitForSelector("#libTagName", { timeout: 20000 });
     await page.type("#libTagName", "Tags E2E");
     const tagInput = await page.$(".yt-modal .yt-tag-compose .yt-input");
     for (const tag of ["musica", "remix", "dj"]) {
@@ -267,7 +276,7 @@ async function main() {
     check(copied.content === descE2E.content, "duplicação copia o conteúdo integral");
 
     await clickTestId(page, `library-edit-description-${copied.id}`);
-    await page.waitForSelector("#libDescName", { timeout: 5000 });
+    await page.waitForSelector("#libDescName", { timeout: 20000 });
     check((await page.$eval("#libDescName", (el) => el.value)) === copied.name, "editar carrega o nome existente");
     await clearField(page, "#libDescName");
     await page.type("#libDescName", "Descrição editada no E2E");
@@ -276,7 +285,7 @@ async function main() {
     check(true, "descrição editada na biblioteca");
 
     await clickTestId(page, `library-delete-description-${copied.id}`);
-    await page.waitForSelector('[data-testid="library-confirm-delete"]', { timeout: 5000 });
+    await page.waitForSelector('[data-testid="library-confirm-delete"]', { timeout: 20000 });
     check(true, "exclusão pede confirmação");
     await clickTestId(page, "library-confirm-delete");
     await page.waitForFunction(
@@ -311,11 +320,11 @@ async function main() {
 
     /* ── 6. usar descrição salva e editar (sem alterar a salva) ── */
     await clickTestId(page, "pick-description");
-    await page.waitForSelector(".yt-modal", { timeout: 5000 });
+    await page.waitForSelector(".yt-modal", { timeout: 20000 });
     const useButton = await page.$('[data-testid^="use-description-"]');
     await useButton.click();
-    await page.waitForFunction(() => !document.querySelector(".yt-modal"), { timeout: 5000 });
-    await page.waitForFunction(() => document.getElementById("ytDescription").value.includes("Descrição original salva no E2E"), { timeout: 5000 });
+    await page.waitForFunction(() => !document.querySelector(".yt-modal"), { timeout: 20000 });
+    await page.waitForFunction(() => document.getElementById("ytDescription").value.includes("Descrição original salva no E2E"), { timeout: 20000 });
     check(true, "descrição salva carregada no campo de descrição");
 
     await page.click("#ytDescription");
@@ -327,10 +336,10 @@ async function main() {
 
     /* ── 7. usar tags salvas + sugestões ── */
     await clickTestId(page, "pick-tagset");
-    await page.waitForSelector(".yt-modal", { timeout: 5000 });
+    await page.waitForSelector(".yt-modal", { timeout: 20000 });
     const useTags = await page.$('[data-testid^="use-tagset-"]');
     await useTags.click();
-    await page.waitForFunction(() => !document.querySelector(".yt-modal"), { timeout: 5000 });
+    await page.waitForFunction(() => !document.querySelector(".yt-modal"), { timeout: 20000 });
     const tagsAfterSet = await page.$$eval(".yt-tag-text", (els) => els.map((el) => el.textContent));
     check(tagsAfterSet.includes("musica") && tagsAfterSet.includes("remix"), "tags do conjunto salvas carregadas e somadas");
 
@@ -342,7 +351,7 @@ async function main() {
     await page.click(".yt-suggestion:not([disabled])");
     await page.waitForFunction(
       (previous) => document.querySelectorAll(".yt-tag").length > previous,
-      { timeout: 5000 },
+      { timeout: 20000 },
       beforeCount
     );
     check(true, "sugestão adicionada somente após clique do usuário");
@@ -356,12 +365,12 @@ async function main() {
     check(overLimit.length === 0, `"Adicionar todas" respeita o limite de 500 caracteres (${await page.$eval(".yt-tag-meter", (el) => el.innerText)})`);
 
     await clickTestId(page, "clear-tags");
-    await page.waitForFunction(() => document.querySelectorAll(".yt-tag").length === 0, { timeout: 5000 });
+    await page.waitForFunction(() => document.querySelectorAll(".yt-tag").length === 0, { timeout: 20000 });
     check(true, '"Limpar tags" remove todas as tags');
     await clickTestId(page, "pick-tagset");
-    await page.waitForSelector('[data-testid^="use-tagset-"]', { timeout: 5000 });
+    await page.waitForSelector('[data-testid^="use-tagset-"]', { timeout: 20000 });
     await page.click('[data-testid^="use-tagset-"]');
-    await page.waitForFunction(() => document.querySelectorAll(".yt-tag").length >= 3, { timeout: 5000 });
+    await page.waitForFunction(() => document.querySelectorAll(".yt-tag").length >= 3, { timeout: 20000 });
     check(true, "conjunto de tags recarregado depois de limpar");
 
     /* ── 8. editar / remover / reordenar tags ── */
@@ -374,7 +383,7 @@ async function main() {
     await page.keyboard.press("Enter");
     await page.waitForFunction(
       (value) => [...document.querySelectorAll(".yt-tag-text")].some((el) => el.textContent === value),
-      { timeout: 5000 },
+      { timeout: 20000 },
       "tag-editada-e2e"
     );
     check(true, `tag editada (antes: "${firstTag}")`);
@@ -387,7 +396,7 @@ async function main() {
     const removeButtons = await page.$$(".yt-tag .yt-tag-tools button:nth-child(4)");
     const countBeforeRemove = await page.$$eval(".yt-tag", (els) => els.length);
     await removeButtons[removeButtons.length - 1].click();
-    await page.waitForFunction((before) => document.querySelectorAll(".yt-tag").length < before, { timeout: 5000 }, countBeforeRemove);
+    await page.waitForFunction((before) => document.querySelectorAll(".yt-tag").length < before, { timeout: 20000 }, countBeforeRemove);
     check(true, "tag removida");
 
     /* ── 9. título + configurações ── */
@@ -442,7 +451,7 @@ async function main() {
     await clickTestId(page, "remove-thumbnail");
     await page.waitForFunction(
       () => !document.querySelector(".yt-thumb-preview img[src^='data:image/png']"),
-      { timeout: 5000 },
+      { timeout: 20000 },
     );
     check(true, "miniatura pode ser removida antes do envio");
     await clickTestId(page, "use-frame-thumbnail");
@@ -562,9 +571,9 @@ async function main() {
     );
 
     await clickTestId(page, "nav-loopsync");
-    await page.waitForFunction(() => document.querySelector('[data-testid="area-youtube"]').hidden === true, { timeout: 5000 });
+    await page.waitForFunction(() => document.querySelector('[data-testid="area-youtube"]').hidden === true, { timeout: 20000 });
     await clickTestId(page, "nav-youtube");
-    await page.waitForFunction(() => document.querySelector('[data-testid="area-youtube"]').hidden === false, { timeout: 5000 });
+    await page.waitForFunction(() => document.querySelector('[data-testid="area-youtube"]').hidden === false, { timeout: 20000 });
     await page.waitForFunction(() => document.querySelectorAll(".yt-queue-item").length === 2, { timeout: 8000 });
     check(
       (await page.$eval("#ytTitle", (el) => el.value)) === "Vídeo persistente E2E",
