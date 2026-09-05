@@ -17,6 +17,30 @@
 const http = require("http");
 const crypto = require("crypto");
 
+/**
+ * Miniaturas em data URI (PNG 32x18).
+ *
+ * O mock não tem arquivos de imagem, e apontar para `https://example.com/...`
+ * gerava 404 no navegador — erro de console/rede que sujava o E2E e quebrava a
+ * pré-visualização no demo. Data URI carrega sem rede, funciona em qualquer
+ * host (inclusive atrás do proxy de preview) e o app já usa esse formato para
+ * as miniaturas escolhidas pelo usuário.
+ */
+const THUMBNAILS = {
+  gray: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAASCAIAAAC1qksFAAAAYUlEQVR42rXCCQ7BUABAwXcsRGmr62/pXqkQwv3v4BRvMjTLT02Yv2rq6aOmGt5qyv6lJu+earLbQ82l3dSkzV1NElY1cT2rOZeTmlMxqonyXs0x69Qc0quafdKq2cVB/Qcajv5Q6KpHnAAAAABJRU5ErkJggg==",
+  purple: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAASCAIAAAC1qksFAAAAdklEQVR42mOosXpLU8RQZfmKpoihwuIZTRFDufljmiKGUvP7NEUMxWZ3aIoYCk1v0BQx5JtcpSliyDW+SFPEkGN0jqaIIcvwFE0RQ4ZhcZoihjSDwzRFDCn6B2iKGJL09tAUMSTq7qQpYojX2UpTxBCrs4mmCAAWpzlO5jO+3AAAAABJRU5ErkJggg==",
+  blue: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAASCAIAAAC1qksFAAAAb0lEQVR42rXCsQZCYRiA4Xf/vv+/4kSOSCRyRA6JNEdDREM0RENEQzREQ3QXXcX7eKibn5q6/qqpq4+asnyrKd1LTVk81ZT5Q01p72pydlOT06uanFzU5PisJkcnPTE8qonmoCYGezXR36mJ3lb9B9DqK46LbdPmAAAAAElFTkSuQmCC",
+  amber: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAASCAIAAAC1qksFAAAAaElEQVR42rXCQQZCARhG0Tv5/j0mKUlJevK8tKCIaBAREQ0iIhpEtJtWcY/Db1NqvutS8+lKzbstNa9VqXk2peaxjJr7Impu86i5zqLmMo2a8yRqTuOoOY6i5jCMmv0ganb9qNn2ov4D1uSh31C+B6kAAAAASUVORK5CYII=",
+};
+const THUMB_KEYS = Object.keys(THUMBNAILS);
+
+/** Escolhe uma cor estável a partir do id, para vídeos diferentes parecerem diferentes. */
+function thumbFor(seed) {
+  let hash = 0;
+  for (const char of String(seed)) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  return THUMBNAILS[THUMB_KEYS[hash % THUMB_KEYS.length]];
+}
+
 function makeIdToken(payload) {
   const encode = (value) => Buffer.from(JSON.stringify(value)).toString("base64url");
   const header = encode({ alg: "RS256", kid: "test", typ: "JWT" });
@@ -119,8 +143,8 @@ async function startMockGoogle(options = {}) {
         tags: session.metadata.snippet.tags || [],
         categoryId: session.metadata.snippet.categoryId || null,
         thumbnails: {
-          default: { url: `https://example.com/${videoId}-default.jpg` },
-          medium: { url: `https://example.com/${videoId}-medium.jpg` },
+          default: { url: thumbFor(videoId) },
+          medium: { url: thumbFor(videoId) },
         },
       },
       status: {
@@ -314,7 +338,7 @@ button{margin-top:14px;background:#ff8a3d;border:0;color:#221204;font-weight:700
           sub: tokenRecord.sub,
           email: tokenRecord.email || "criador@example.com",
           name: tokenRecord.name || "Criador de Teste",
-          picture: "https://example.com/avatar.png",
+          picture: THUMBNAILS.purple,
         });
       }
 
@@ -342,8 +366,8 @@ button{margin-top:14px;background:#ff8a3d;border:0;color:#221204;font-weight:700
                 description: "Canal usado nos testes",
                 country: "BR",
                 thumbnails: {
-                  default: { url: "https://example.com/thumb-default.jpg" },
-                  medium: { url: "https://example.com/thumb-medium.jpg" },
+                  default: { url: THUMBNAILS.blue },
+                  medium: { url: THUMBNAILS.blue },
                 },
               },
               contentDetails: { relatedPlaylists: { uploads: "UU_TESTE_UPLOADS" } },
@@ -370,12 +394,12 @@ button{margin-top:14px;background:#ff8a3d;border:0;color:#221204;font-weight:700
           items: [
             {
               id: "PL_MUSICA",
-              snippet: { title: "Músicas 2026", privacyStatus: "public", thumbnails: { default: { url: "https://example.com/pl1.jpg" } } },
+              snippet: { title: "Músicas 2026", privacyStatus: "public", thumbnails: { default: { url: THUMBNAILS.amber } } },
               contentDetails: { itemCount: 12 },
             },
             {
               id: "PL_VLOGS",
-              snippet: { title: "Vlogs", privacyStatus: "private", thumbnails: { default: { url: "https://example.com/pl2.jpg" } } },
+              snippet: { title: "Vlogs", privacyStatus: "private", thumbnails: { default: { url: THUMBNAILS.gray } } },
               contentDetails: { itemCount: 3 },
             },
           ],
@@ -440,8 +464,8 @@ button{margin-top:14px;background:#ff8a3d;border:0;color:#221204;font-weight:700
             {
               snippet: {
                 thumbnails: {
-                  medium: { url: "https://example.com/custom-thumb.jpg" },
-                  maxRes: { url: "https://example.com/custom-thumb-max.jpg" },
+                  medium: { url: THUMBNAILS.purple },
+                  maxRes: { url: THUMBNAILS.purple },
                 },
               },
             },
