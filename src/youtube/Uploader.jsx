@@ -191,74 +191,91 @@ export default function Uploader({ data, showToast, incomingVideo, onIncomingCon
     setItems((prev) => prev.filter((item) => item.id !== id));
   }, []);
 
-  /* ── vídeo vindo do fluxo principal do LoopSync ──
-     Duas origens possíveis:
-       a) `sourceJobId`  -> MP4 já processado no servidor (nada volta ao navegador)
-       b) `file`         -> Blob/File (modo navegador)                            */
+  /* ── vídeos vindos do fluxo principal do LoopSync ── */
+
+  const buildIncomingItem = useCallback(async (incoming) => {
+    const fromServer = Boolean(incoming && incoming.sourceJobId);
+    const name = (incoming && (incoming.name || (incoming.file && incoming.file.name))) || "video.mp4";
+    const size = Number((incoming && (incoming.size || (incoming.file && incoming.file.size))) || 0);
+    let duration = (incoming && incoming.duration) || null;
+    let width = null;
+    let height = null;
+    let poster = null;
+
+    try {
+      if (fromServer && incoming.previewUrl) {
+        const frame = await captureFrameFromUrl(incoming.previewUrl);
+        if (frame && frame.blob) poster = await blobToDataUrl(frame.blob);
+        duration = duration || (frame && frame.duration) || null;
+      } else if (incoming.file) {
+        const meta = await readVideoMeta(incoming.file);
+        duration = meta.duration || duration;
+        width = meta.width || null;
+        height = meta.height || null;
+        const frame = await captureVideoFrame(incoming.file);
+        if (frame && frame.blob) poster = await blobToDataUrl(frame.blob);
+      }
+    } catch {
+      poster = null;
+    }
+
+    return {
+      id: uid(),
+      file: incoming.file || null,
+      sourceJobId: fromServer ? incoming.sourceJobId : null,
+      previewUrl: incoming.previewUrl || null,
+      name,
+      size,
+      format: extensionOf({ name }) || "MP4",
+      mime: (incoming.file && incoming.file.type) || "video/mp4",
+      duration,
+      width,
+      height,
+      poster,
+      fromLoopSync: true,
+      meta: {
+        ...emptyMeta(limits),
+        title: incoming.title || titleFromFileName(name),
+        thumbnail: poster ? { dataUrl: poster, mime: "image/jpeg", name: "Quadro do vídeo", size: 0, source: "frame" } : null,
+      },
+      upload: null,
+    };
+  }, [limits]);
 
   useEffect(() => {
     if (!incomingVideo) return;
     let cancelled = false;
 
     (async () => {
-      const fromServer = Boolean(incomingVideo.sourceJobId);
-      const name = incomingVideo.name || (incomingVideo.file && incomingVideo.file.name) || "LoopSync.mp4";
-      const size = Number(incomingVideo.size || (incomingVideo.file && incomingVideo.file.size) || 0);
-
-      let duration = incomingVideo.duration || null;
-      let poster = null;
-
-      try {
-        if (fromServer && incomingVideo.previewUrl) {
-          const frame = await captureFrameFromUrl(incomingVideo.previewUrl);
-          if (frame && frame.blob) {
-            poster = await blobToDataUrl(frame.blob);
-            duration = duration || frame.duration || null;
-          }
-        } else if (incomingVideo.file) {
-          const meta = await readVideoMeta(incomingVideo.file);
-          duration = meta.duration;
-          const frame = await captureVideoFrame(incomingVideo.file);
-          if (frame && frame.blob) poster = await blobToDataUrl(frame.blob);
-        }
-      } catch {
-        poster = null;
+      const incomingList = Array.isArray(incomingVideo.items) ? incomingVideo.items : [incomingVideo];
+      const built = [];
+      for (const incoming of incomingList) {
+        const item = await buildIncomingItem(incoming);
+        if (cancelled) return;
+        built.push(item);
       }
-      if (cancelled) return;
-
-      const item = {
-        id: uid(),
-        file: incomingVideo.file || null,
-        sourceJobId: fromServer ? incomingVideo.sourceJobId : null,
-        previewUrl: incomingVideo.previewUrl || null,
-        name,
-        size,
-        format: extensionOf({ name }) || "MP4",
-        mime: (incomingVideo.file && incomingVideo.file.type) || "video/mp4",
-        duration,
-        width: null,
-        height: null,
-        poster,
-        fromLoopSync: true,
-        meta: {
-          ...emptyMeta(limits),
-          title: incomingVideo.title || titleFromFileName(name),
-          thumbnail: poster ? { dataUrl: poster, mime: "image/jpeg", name: "Quadro do vídeo", size: 0, source: "frame" } : null,
-        },
-        upload: null,
-      };
-
-      setItems((prev) => [item, ...prev]);
-      setActiveId(item.id);
+      if (cancelled || !built.length) return;
+      setItems((prev) => [...built, ...prev]);
+      setActiveId(built[0].id);
       setView("config");
-      showToast("Vídeo gerado no LoopSync adicionado ao envio do YouTube.", "info");
-      onIncomingConsumed && onIncomingConsumed();
-    })();
+      showToast(
+        built.length === 1
+          ? "Vídeo gerado no LoopSync adicionado ao envio do YouTube."
+          : `${built.length} vídeos gerados no LoopSync adicionados ao envio do YouTube.`,
+        "info"
+      );
+      if (onIncomingConsumed) onIncomingConsumed();
+    })().catch((error) => {
+      if (!cancelled) {
+        showToast(error.message || "Não foi possível adicionar os vídeos gerados.", "error");
+        if (onIncomingConsumed) onIncomingConsumed();
+      }
+    });
 
     return () => {
       cancelled = true;
     };
-  }, [incomingVideo]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [incomingVideo, buildIncomingItem]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ── templates ── */
 

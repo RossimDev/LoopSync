@@ -43,6 +43,14 @@ jobs:
           npm test 2>&1 | tee /tmp/media.log
           exit ${PIPESTATUS[0]}
 
+      - name: LoopSync — interface principal (jsdom + servidor + ffmpeg)
+        id: loopsync_ui
+        continue-on-error: true
+        run: |
+          set +e
+          npm run test:loopsync:ui 2>&1 | tee /tmp/loopsync-ui.log
+          exit ${PIPESTATUS[0]}
+
       - name: Módulo YouTube — integração + API
         id: api
         continue-on-error: true
@@ -93,6 +101,7 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           OUT_BUILD: ${{ steps.build.outcome }}
           OUT_MEDIA: ${{ steps.media.outcome }}
+          OUT_LOOPSYNC_UI: ${{ steps.loopsync_ui.outcome }}
           OUT_API: ${{ steps.api.outcome }}
           OUT_UI: ${{ steps.ui.outcome }}
           OUT_E2E: ${{ steps.e2e.outcome }}
@@ -105,12 +114,13 @@ jobs:
             echo "| --- | --- | --- |"
             echo "| Build | \`npm run build\` | $OUT_BUILD |"
             echo "| Mídia (ffmpeg) | \`npm test\` | $OUT_MEDIA |"
+            echo "| LoopSync — interface (jsdom + ffmpeg) | \`npm run test:loopsync:ui\` | $OUT_LOOPSYNC_UI |"
             echo "| YouTube — integração | \`npm run test:youtube\` | $OUT_API |"
             echo "| YouTube — interface (jsdom) | \`npm run test:youtube:ui\` | $OUT_UI |"
             echo "| YouTube — E2E Chromium | \`npm run test:youtube:browser\` | $OUT_E2E |"
           } > "$body"
 
-          for pair in "Build:/tmp/build.log" "Mídia:/tmp/media.log" "Integração:/tmp/api.log" "Interface (jsdom):/tmp/ui.log" "E2E Chromium:/tmp/e2e.log"; do
+          for pair in "Build:/tmp/build.log" "Mídia:/tmp/media.log" "LoopSync UI:/tmp/loopsync-ui.log" "Integração:/tmp/api.log" "Interface (jsdom):/tmp/ui.log" "E2E Chromium:/tmp/e2e.log"; do
             name="${pair%%:*}"
             log="${pair#*:}"
             if [ -f "$log" ]; then
@@ -127,7 +137,7 @@ jobs:
             fi
           done
 
-          if [ "$OUT_BUILD$OUT_MEDIA$OUT_API$OUT_UI$OUT_E2E" != "successsuccesssuccesssuccesssuccess" ]; then
+          if [ "$OUT_BUILD$OUT_MEDIA$OUT_LOOPSYNC_UI$OUT_API$OUT_UI$OUT_E2E" != "successsuccesssuccesssuccesssuccesssuccess" ]; then
             if [ -n "$PR_NUMBER" ]; then
               gh pr comment "$PR_NUMBER" --body-file "$body" || echo "não foi possível comentar no PR"
             else

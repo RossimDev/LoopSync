@@ -1,183 +1,117 @@
-import React, { useState, useRef, useCallback, useEffect } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { processInBrowser } from "./lib/wasm.js";
+import { kindOfFile, loadImageSize, loadVideoMeta, loadAudioDuration } from "./lib/files.js";
+import { formatDuration } from "./lib/format.js";
+import { outputFileName } from "./lib/naming.js";
+import { DEFAULT_IMAGE_SIZE, normalizeImageSize, even } from "./lib/image-size.js";
+import ImageSizePicker from "./ImageSizePicker.jsx";
+import Batch from "./Batch.jsx";
 import YouTube from "./youtube/YouTube.jsx";
 import "./youtube.css";
 
-/* ─── helpers ────────────────────────────────────────────────────── */
-
 const REREAD_BYTES = 65536;
-const MAX_WASM_TOTAL_BYTES = 1.2 * 1024 * 1024 * 1024; // 1.2 GB
-
-function formatDuration(seconds) {
-  const totalSeconds = Math.max(0, Math.round(Number(seconds || 0)));
-  const s = totalSeconds % 60;
-  const m = Math.floor(totalSeconds / 60) % 60;
-  const h = Math.floor(totalSeconds / 3600);
-  const pad = (n) => String(n).padStart(2, "0");
-  return h > 0 ? `${pad(h)}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
-}
+export const MAX_WASM_TOTAL_BYTES = 1.2 * 1024 * 1024 * 1024;
 
 function computeLoopCount(videoSeconds, audioSeconds) {
-  const v = Math.max(0.01, Math.round((Number(videoSeconds) || 0) * 10) / 10);
-  const a = Math.max(0, Math.round((Number(audioSeconds) || 0) * 10) / 10);
-  if (a <= 0) return 0;
-  if (v >= a) return 1;
-  return Math.max(1, Math.ceil(a / v));
+  const video = Math.max(0.01, Math.round((Number(videoSeconds) || 0) * 10) / 10);
+  const audio = Math.max(0, Math.round((Number(audioSeconds) || 0) * 10) / 10);
+  if (audio <= 0) return 0;
+  return video >= audio ? 1 : Math.max(1, Math.ceil(audio / video));
 }
 
-function timestampName(date = new Date()) {
-  const pad = (n) => String(n).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}_${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`;
-}
-
-function loadVideoDuration(file) {
-  return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(file);
-    const video = document.createElement("video");
-    video.preload = "metadata";
-    video.muted = true;
-    const cleanup = () => {
-      URL.revokeObjectURL(url);
-      video.removeAttribute("src");
-      video.load();
-    };
-    const onLoaded = () => {
-      if (!Number.isFinite(video.duration) || video.duration <= 0 || video.videoWidth === 0) {
-        cleanup();
-        reject(new Error("video"));
-        return;
-      }
-      const duration = video.duration;
-      cleanup();
-      resolve(duration);
-    };
-    video.onloadedmetadata = onLoaded;
-    video.onerror = () => { cleanup(); reject(new Error("video")); };
-    video.src = url;
-  });
-}
-
-function loadAudioDuration(file) {
-  return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(file);
-    const audio = document.createElement("audio");
-    audio.preload = "metadata";
-    const cleanup = () => {
-      URL.revokeObjectURL(url);
-      audio.removeAttribute("src");
-      audio.load();
-    };
-    const onLoaded = () => {
-      if (!Number.isFinite(audio.duration) || audio.duration <= 0) {
-        cleanup();
-        reject(new Error("audio"));
-        return;
-      }
-      const duration = audio.duration;
-      cleanup();
-      resolve(duration);
-    };
-    audio.onloadedmetadata = onLoaded;
-    audio.onerror = () => { cleanup(); reject(new Error("audio")); };
-    audio.src = url;
-  });
-}
-
-/** Pre-read first 64KB to detect expired file references (Android/cloud). */
 async function preReadFile(file) {
-  await file.slice(0, REREAD_BYTES).arrayBuffer();
+  const part = file.slice(0, REREAD_BYTES);
+  if (typeof part.arrayBuffer === "function") {
+    await part.arrayBuffer();
+    return;
+  }
+  await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve();
+    reader.onerror = () => reject(reader.error || new Error("file"));
+    reader.readAsArrayBuffer(part);
+  });
 }
 
 async function hasBackend() {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 3000);
   try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 3000);
-    const res = await fetch("/health", { signal: controller.signal });
-    clearTimeout(timer);
-    if (res.ok) {
-      const body = await res.json();
-      return Boolean(body && body.ok && body.service === "loopsync");
-    }
-    return false;
+    const response = await fetch("/health", { signal: controller.signal });
+    if (!response.ok) return false;
+    const body = await response.json();
+    return Boolean(body && body.ok && body.service === "loopsync");
   } catch {
     return false;
+  } finally {
+    clearTimeout(timer);
   }
 }
 
-function uploadWithProgress(formData, onProgress) {
+export function uploadWithProgress(formData, onProgress) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", "/api/process");
     xhr.responseType = "json";
     if (xhr.upload) {
       xhr.upload.onprogress = (event) => {
-        if (event.lengthComputable) onProgress(event.loaded / event.total);
+        if (event.lengthComputable && typeof onProgress === "function") onProgress(event.loaded / event.total);
       };
     }
     xhr.onload = () => {
-      const body = xhr.response;
-      if (xhr.status >= 200 && xhr.status < 300 && body && body.ok && body.id) {
-        resolve(body);
-      } else {
-        reject(new Error((body && body.error) || "Não foi possível enviar os arquivos."));
+      let body = xhr.response;
+      if (typeof body === "string") {
+        try { body = JSON.parse(body); } catch { body = null; }
       }
+      if (xhr.status >= 200 && xhr.status < 300 && body && body.ok && body.id) resolve(body);
+      else reject(new Error((body && body.error) || "Não foi possível enviar os arquivos."));
     };
     xhr.onerror = () => reject(new Error("Não foi possível conectar ao serviço de processamento."));
     xhr.send(formData);
   });
 }
 
-async function pollJob(jobId, onProgress) {
+export async function pollJob(jobId, onProgress) {
   for (;;) {
-    const res = await fetch(`/api/process/${jobId}`);
-    if (!res.ok) throw new Error("Não foi possível acompanhar o processamento.");
-    const body = await res.json();
-    onProgress(body);
+    const response = await fetch(`/api/process/${jobId}`);
+    if (!response.ok) throw new Error("Não foi possível acompanhar o processamento.");
+    const body = await response.json();
+    if (typeof onProgress === "function") onProgress(body);
     if (body.status === "done") return body;
     if (body.status === "error") throw new Error(body.error || "Não foi possível gerar o vídeo.");
-    if (body.status === "queued" || body.status === "processing") {
-      await new Promise((r) => setTimeout(r, 650));
-    }
+    await new Promise((resolve) => setTimeout(resolve, 650));
   }
 }
 
-/* ─── spring config ──────────────────────────────────────────────── */
-
 const springTransition = { type: "spring", stiffness: 260, damping: 26 };
 const stagger = { hidden: {}, show: { transition: { staggerChildren: 0.08 } } };
-const fadeUp = {
-  hidden: { opacity: 0, y: 24 },
-  show: { opacity: 1, y: 0, transition: springTransition },
-};
-const childFadeUp = {
-  hidden: { opacity: 0, y: 18 },
-  show: { opacity: 1, y: 0, transition: springTransition },
-};
-
-/* ─── App ────────────────────────────────────────────────────────── */
+const fadeUp = { hidden: { opacity: 0, y: 24 }, show: { opacity: 1, y: 0, transition: springTransition } };
+const childFadeUp = { hidden: { opacity: 0, y: 18 }, show: { opacity: 1, y: 0, transition: springTransition } };
 
 function areaFromHash() {
-  const hash = String(window.location.hash || "");
-  return hash.startsWith("#/youtube") ? "youtube" : "loopsync";
+  return String(window.location.hash || "").startsWith("#/youtube") ? "youtube" : "loopsync";
+}
+
+function visualOutputDimensions(visual, imageSize) {
+  if (!visual) return { width: 0, height: 0 };
+  if (visual.kind !== "image") return { width: visual.width, height: visual.height };
+  const requested = normalizeImageSize(imageSize);
+  return requested || { width: even(visual.width), height: even(visual.height) };
 }
 
 export default function App() {
-  const [area, setArea] = useState(areaFromHash); // loopsync | youtube
-  // A área YouTube continua montada (oculta) depois da primeira visita: assim a
-  // fila de vídeos, os metadados em edição e os uploads em andamento não se
-  // perdem quando o usuário volta para o LoopSync.
-  const [youtubeMounted, setYoutubeMounted] = useState(areaFromHash === "youtube");
+  const [area, setArea] = useState(areaFromHash);
+  const [youtubeMounted, setYoutubeMounted] = useState(areaFromHash() === "youtube");
   const [incomingVideo, setIncomingVideo] = useState(null);
-  const [screen, setScreen] = useState("form"); // form | processing | result
-  const [videoFile, setVideoFile] = useState(null);
-  const [audioFile, setAudioFile] = useState(null);
-  const [videoDuration, setVideoDuration] = useState(NaN);
-  const [audioDuration, setAudioDuration] = useState(NaN);
-  const [videoName, setVideoName] = useState("");
-  const [audioName, setAudioName] = useState("");
-  const [videoCardSelected, setVideoCardSelected] = useState(false);
-  const [audioCardSelected, setAudioCardSelected] = useState(false);
+
+  const [mode, setMode] = useState("single");
+  const [batchSeed, setBatchSeed] = useState(null);
+  const [outputSize, setOutputSize] = useState(DEFAULT_IMAGE_SIZE);
+  const [screen, setScreen] = useState("form");
+  const [visual, setVisual] = useState(null);
+  const [audio, setAudio] = useState(null);
+  const [dragTarget, setDragTarget] = useState(null);
   const [progress, setProgress] = useState(0);
   const [progressText, setProgressText] = useState("Preparando arquivos…");
   const [result, setResult] = useState(null);
@@ -199,6 +133,11 @@ export default function App() {
     toastTimerRef.current = setTimeout(() => setToast(null), 3600);
   }, []);
 
+  useEffect(() => () => {
+    clearTimeout(toastTimerRef.current);
+    if (resultBlobUrlRef.current) URL.revokeObjectURL(resultBlobUrlRef.current);
+  }, []);
+
   useEffect(() => {
     if (area === "youtube") setYoutubeMounted(true);
   }, [area]);
@@ -218,591 +157,412 @@ export default function App() {
     return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
 
-  /** Leva o MP4 gerado pelo LoopSync direto para o upload do YouTube. */
-  const sendToYouTube = useCallback(async () => {
-    if (!result) return;
-    const downloadUrl = String(result.downloadUrl || "");
-    const isServerResult = downloadUrl.startsWith("/api/result/");
-    const parsedJobId = isServerResult ? downloadUrl.split("/").pop().split("?")[0] : null;
-    const jobId = jobIdRef.current || parsedJobId;
+  const chooseMode = useCallback((next) => {
+    if (busyRef.current) return;
+    setMode(next);
+    setScreen("form");
+  }, []);
 
-    if (isServerResult && jobId) {
-      setIncomingVideo({
-        sourceJobId: jobId,
-        name: result.fileName || `LoopSync_${timestampName()}.mp4`,
-        size: Number(result.sizeBytes || 0),
-        previewUrl: result.previewUrl,
-        title: "",
-      });
-      navigate("youtube");
-      return;
-    }
-
-    // Modo navegador (ffmpeg.wasm): o resultado é um Blob local.
+  const applyVisual = useCallback(async (file) => {
+    const kind = kindOfFile(file);
     try {
-      const response = await fetch(downloadUrl);
-      if (!response.ok) throw new Error("blob");
-      const blob = await response.blob();
-      const fileName = result.fileName || `LoopSync_${timestampName()}.mp4`;
-      const file = new File([blob], fileName, { type: blob.type || "video/mp4" });
-      setIncomingVideo({ file, name: fileName, size: blob.size, title: "" });
-      navigate("youtube");
+      if (kind === "image") {
+        const size = await loadImageSize(file);
+        setVisual({ file, name: file.name, size: file.size, kind, duration: 0, ...size });
+      } else if (kind === "video") {
+        const meta = await loadVideoMeta(file);
+        setVisual({ file, name: file.name, size: file.size, kind, ...meta });
+      }
     } catch {
-      showToast("Não foi possível levar este vídeo para o YouTube. Salve o arquivo e selecione-o na aba YouTube.", "error");
-      navigate("youtube");
-    }
-  }, [navigate, result, showToast]);
-
-  const videoRef = useRef(null);
-  const audioRef = useRef(null);
-
-  useEffect(() => {
-    videoRef.current = videoFile;
-  }, [videoFile]);
-  useEffect(() => {
-    audioRef.current = audioFile;
-  }, [audioFile]);
-
-  /* ── file selection ── */
-  const onSelectVideo = useCallback(async (file) => {
-    if (!file) return;
-    try {
-      const duration = await loadVideoDuration(file);
-      setVideoFile(file);
-      setVideoDuration(duration);
-      setVideoName(file.name);
-      setVideoCardSelected(true);
-    } catch {
-      showToast("Não foi possível utilizar este arquivo. Escolha outro vídeo.", "error");
+      showToast(
+        kind === "image"
+          ? "Não foi possível utilizar esta imagem. Escolha outra foto."
+          : "Não foi possível utilizar este arquivo. Escolha outro vídeo.",
+        "error"
+      );
       if (videoInputRef.current) videoInputRef.current.value = "";
     }
   }, [showToast]);
 
-  const onSelectAudio = useCallback(async (file) => {
-    if (!file) return;
+  const applyAudio = useCallback(async (file) => {
     try {
       const duration = await loadAudioDuration(file);
-      setAudioFile(file);
-      setAudioDuration(duration);
-      setAudioName(file.name);
-      setAudioCardSelected(true);
+      setAudio({ file, name: file.name, size: file.size, kind: "audio", duration });
     } catch {
       showToast("Não foi possível utilizar este arquivo. Escolha outro áudio.", "error");
       if (audioInputRef.current) audioInputRef.current.value = "";
     }
   }, [showToast]);
 
-  /* ── derived ── */
-  const bothReady = videoFile && audioFile && Number.isFinite(videoDuration) && Number.isFinite(audioDuration);
-  const loops = bothReady ? computeLoopCount(videoDuration, audioDuration) : 0;
-  const infoExpanded = bothReady;
+  const receiveFiles = useCallback(async (fileList, target) => {
+    const files = Array.from(fileList || []);
+    if (!files.length) return;
+    const classified = files.map((file) => ({ file, kind: kindOfFile(file) }));
+    const visuals = classified.filter((item) => item.kind === "video" || item.kind === "image");
+    const audios = classified.filter((item) => item.kind === "audio");
+    const unknown = classified.filter((item) => item.kind === "unknown");
 
-  /* ── cleanup ── */
-  const clearOldJob = useCallback(() => {
-    if (jobIdRef.current && result) {
-      fetch(`/api/clear/${jobIdRef.current}`, { method: "POST" }).catch(() => {});
+    if (mode === "single" && (visuals.length > 1 || audios.length > 1)) {
+      setBatchSeed({ id: Date.now(), files: classified.filter((item) => item.kind !== "unknown").map((item) => item.file) });
+      setMode("batch");
+      setScreen("form");
+      showToast("Vários arquivos de uma vez: abri o modo Em massa com todos eles.");
+      if (unknown.length) {
+        setTimeout(() => showToast(`Não reconheci: ${unknown.map((item) => item.file.name).join(", ")}. Envie vídeo, imagem ou áudio.`, "error"), 0);
+      }
+      return;
     }
+
+    if (visuals[0]) await applyVisual(visuals[0].file);
+    if (audios[0]) await applyAudio(audios[0].file);
+
+    if (target === "video" && audios.length && !visuals.length) {
+      showToast("Este arquivo é um áudio — já coloquei na caixa de áudio.");
+    } else if (target === "audio" && visuals.length && !audios.length) {
+      showToast("Este arquivo é um vídeo/imagem — já coloquei na caixa de vídeo.");
+    } else if (!visuals.length && !audios.length) {
+      showToast(
+        target === "video"
+          ? "Envie um vídeo (MP4, MOV, WebM…) ou uma imagem (JPG, PNG, WebP…)."
+          : "Envie um áudio (MP3, WAV, M4A, FLAC…).",
+        "error"
+      );
+    }
+
+    if (unknown.length) {
+      showToast(`Não reconheci: ${unknown.map((item) => item.file.name || "arquivo sem nome").join(", ")}. Envie vídeo, imagem ou áudio.`, "error");
+    }
+  }, [applyAudio, applyVisual, mode, showToast]);
+
+  const dropHandlers = useCallback((target) => ({
+    onDragEnter(event) {
+      event.preventDefault();
+      setDragTarget(target);
+    },
+    onDragOver(event) {
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+      setDragTarget(target);
+    },
+    onDragLeave(event) {
+      if (event.relatedTarget && event.currentTarget.contains(event.relatedTarget)) return;
+      setDragTarget((current) => current === target ? null : current);
+    },
+    onDrop(event) {
+      event.preventDefault();
+      setDragTarget(null);
+      receiveFiles(event.dataTransfer && event.dataTransfer.files, target);
+    },
+  }), [receiveFiles]);
+
+  const clearOldJob = useCallback(() => {
+    if (jobIdRef.current) fetch(`/api/clear/${jobIdRef.current}`, { method: "POST" }).catch(() => {});
+    jobIdRef.current = null;
     if (resultBlobUrlRef.current) {
       URL.revokeObjectURL(resultBlobUrlRef.current);
       resultBlobUrlRef.current = null;
     }
-    jobIdRef.current = null;
-  }, [result]);
+  }, []);
+
+  const processPair = useCallback(async ({ visual: visualItem, audio: audioItem, fileName, onProgress }) => {
+    try {
+      await preReadFile(visualItem.file);
+    } catch {
+      throw new Error(
+        visualItem.kind === "image"
+          ? "Não foi possível ler a imagem selecionada. Selecione o arquivo novamente."
+          : "Não foi possível ler o vídeo selecionado. Selecione o arquivo novamente."
+      );
+    }
+    try {
+      await preReadFile(audioItem.file);
+    } catch {
+      throw new Error("Não foi possível ler o áudio selecionado. Selecione o arquivo novamente.");
+    }
+    const selectedSize = visualItem.kind === "image" ? normalizeImageSize(outputSize) : null;
+    const report = (percent, text) => {
+      if (typeof onProgress === "function") onProgress(percent, text);
+    };
+
+    if (await hasBackend()) {
+      const form = new FormData();
+      form.append("video", visualItem.file, visualItem.file.name);
+      form.append("audio", audioItem.file, audioItem.file.name);
+      if (selectedSize) {
+        form.append("imageWidth", String(selectedSize.width));
+        form.append("imageHeight", String(selectedSize.height));
+      }
+      const accepted = await uploadWithProgress(form, (fraction) => {
+        report(Math.round(fraction * 20), `Enviando arquivos… ${Math.round(fraction * 100)}%`);
+      });
+      const done = await pollJob(accepted.id, (job) => {
+        const percent = Math.min(98, 20 + Math.round((Number(job.percent) || 0) * 0.78));
+        const text = job.phase === "probing"
+          ? "Reconhecendo arquivos…"
+          : visualItem.kind === "image"
+            ? "Gerando vídeo a partir da imagem…"
+            : "Repetindo vídeo até o final do áudio…";
+        report(percent, text);
+      });
+      const serverResult = done.result;
+      report(100, "Finalizando…");
+      return {
+        jobId: accepted.id,
+        downloadUrl: `${serverResult.downloadUrl}?name=${encodeURIComponent(fileName)}`,
+        previewUrl: `${serverResult.downloadUrl}?inline=1`,
+        sizeBytes: serverResult.sizeBytes,
+        outputDuration: serverResult.outputDuration,
+        actualDuration: audioItem.duration,
+        width: serverResult.width,
+        height: serverResult.height,
+        loopCount: serverResult.loopCount,
+        videoDuration: serverResult.videoDuration,
+        audioDuration: serverResult.audioDuration,
+        fileName,
+      };
+    }
+
+    if ((Number(visualItem.file.size) || 0) + (Number(audioItem.file.size) || 0) > MAX_WASM_TOTAL_BYTES) {
+      throw new Error("Os arquivos são grandes demais para processar no navegador. Use o servidor local ou arquivos menores.");
+    }
+    const browserResult = await processInBrowser({
+      videoFile: visualItem.file,
+      audioFile: audioItem.file,
+      videoDuration: visualItem.kind === "image" ? 0 : visualItem.duration,
+      audioDuration: audioItem.duration,
+      isImage: visualItem.kind === "image",
+      imageSize: outputSize,
+      onProgress: ({ percent, text }) => report(percent, text),
+    });
+    const blobUrl = URL.createObjectURL(browserResult.blob);
+    const file = new File([browserResult.blob], fileName, { type: "video/mp4" });
+    const dimensions = visualOutputDimensions(visualItem, outputSize);
+    report(100, "Finalizando…");
+    return {
+      blobUrl,
+      downloadUrl: blobUrl,
+      previewUrl: blobUrl,
+      sizeBytes: browserResult.blob.size,
+      outputDuration: formatDuration(browserResult.actualDuration),
+      actualDuration: browserResult.actualDuration,
+      width: dimensions.width,
+      height: dimensions.height,
+      loopCount: visualItem.kind === "image" ? 1 : computeLoopCount(visualItem.duration, audioItem.duration),
+      videoDuration: formatDuration(visualItem.duration),
+      audioDuration: formatDuration(audioItem.duration),
+      file,
+      fileName,
+    };
+  }, [outputSize]);
+
+  const visualReady = visual && (visual.kind === "image" ? Boolean(visual.file) : Number.isFinite(visual.duration));
+  const audioReady = audio && Number.isFinite(audio.duration);
+  const bothReady = Boolean(visualReady && audioReady);
+  const loops = bothReady ? (visual.kind === "image" ? 1 : computeLoopCount(visual.duration, audio.duration)) : 0;
 
   const resetToEdit = useCallback(() => {
-    clearOldJob();
     busyRef.current = false;
     setScreen("form");
     setProgress(0);
     setProgressText("Preparando arquivos…");
-  }, [clearOldJob]);
+  }, []);
 
   const resetAll = useCallback(() => {
-    // pause and clean up result video player
     if (resultVideoRef.current) {
-      resultVideoRef.current.pause();
+      try { resultVideoRef.current.pause(); } catch { /* noop */ }
       resultVideoRef.current.removeAttribute("src");
-      resultVideoRef.current.load();
+      try { resultVideoRef.current.load(); } catch { /* noop */ }
     }
-    if (resultBlobUrlRef.current) {
-      URL.revokeObjectURL(resultBlobUrlRef.current);
-      resultBlobUrlRef.current = null;
-    }
-    setVideoFile(null);
-    setAudioFile(null);
-    setVideoDuration(NaN);
-    setAudioDuration(NaN);
-    setVideoName("");
-    setAudioName("");
-    setVideoCardSelected(false);
-    setAudioCardSelected(false);
+    clearOldJob();
+    setVisual(null);
+    setAudio(null);
     setResult(null);
+    setOutputSize(DEFAULT_IMAGE_SIZE);
     if (videoInputRef.current) videoInputRef.current.value = "";
     if (audioInputRef.current) audioInputRef.current.value = "";
     resetToEdit();
-  }, [resetToEdit]);
+  }, [clearOldJob, resetToEdit]);
 
-  /* ── generate ── */
   const generate = useCallback(async () => {
-    if (busyRef.current) return;
-    const vFile = videoRef.current;
-    const aFile = audioRef.current;
-    if (!vFile || !aFile) {
-      showToast("Selecione um vídeo e um áudio para continuar.", "error");
+    if (mode !== "single" || busyRef.current) return;
+    if (!visual || !audio) {
+      showToast("Selecione um vídeo ou imagem e um áudio para continuar.", "error");
       return;
     }
-
     clearOldJob();
     busyRef.current = true;
     setScreen("processing");
     setProgress(2);
     setProgressText("Preparando…");
-
+    const fileName = outputFileName(audio.file.name);
     try {
-      // ── Pre-read check (Part 2) ──
-      try {
-        await preReadFile(vFile);
-      } catch {
-        showToast("Não foi possível ler o vídeo selecionado. Selecione o arquivo novamente.", "error");
-        setVideoFile(null);
-        setVideoDuration(NaN);
-        setVideoName("");
-        setVideoCardSelected(false);
-        if (videoInputRef.current) videoInputRef.current.value = "";
-        resetToEdit();
-        return;
-      }
-      try {
-        await preReadFile(aFile);
-      } catch {
-        showToast("Não foi possível ler o áudio selecionado. Selecione o arquivo novamente.", "error");
-        setAudioFile(null);
-        setAudioDuration(NaN);
-        setAudioName("");
-        setAudioCardSelected(false);
-        if (audioInputRef.current) audioInputRef.current.value = "";
-        resetToEdit();
-        return;
-      }
-
-      const useServer = await hasBackend();
-
-      if (useServer) {
-        // ── Server mode ──
-        const form = new FormData();
-        form.append("video", vFile, vFile.name);
-        form.append("audio", aFile, aFile.name);
-
-        const uploadRes = await uploadWithProgress(form, (loaded) => {
-          const percent = Math.max(2, Math.round(loaded * 5));
+      const generated = await processPair({
+        visual,
+        audio,
+        fileName,
+        onProgress(percent, text) {
           setProgress(percent);
-          setProgressText(`Enviando arquivos… ${Math.round(loaded * 100)}%`);
-        });
-
-        jobIdRef.current = uploadRes.id;
-        setProgress(8);
-        setProgressText("Reconhecendo arquivos…");
-
-        const done = await pollJob(jobIdRef.current, (job) => {
-          const percent = Math.max(8, job.percent || 0);
-          setProgress(percent);
-          if (job.phase === "probing") {
-            setProgressText("Reconhecendo arquivos…");
-          } else if (job.phase === "processing" || job.status === "processing") {
-            setProgressText("Repetindo vídeo até o final do áudio…");
-          } else if (job.status === "done") {
-            setProgress(100);
-            setProgressText("Finalizando…");
-          }
-        });
-
-        const res = done.result;
-        setResult({
-          ...res,
-          previewUrl: `${res.downloadUrl}?inline=1`,
-          downloadUrl: res.downloadUrl,
-          fileName: res.fileName,
-        });
-      } else {
-        // ── Browser (wasm) mode ──
-
-        // Size check (Part 2.4)
-        if (vFile.size + aFile.size > MAX_WASM_TOTAL_BYTES) {
-          showToast("Os arquivos são grandes demais para processar neste dispositivo. Tente um vídeo menor.", "error");
-          resetToEdit();
-          return;
-        }
-
-        setProgress(3);
-        setProgressText("Carregando o motor de vídeo…");
-
-        try {
-          const { blob, actualDuration } = await processInBrowser({
-            videoFile: vFile,
-            audioFile: aFile,
-            videoDuration,
-            audioDuration,
-            onProgress: ({ percent, text }) => {
-              setProgress(percent);
-              setProgressText(text);
-            },
-          });
-
-          const blobUrl = URL.createObjectURL(blob);
-          resultBlobUrlRef.current = blobUrl;
-
-          setResult({
-            videoName: vFile.name,
-            audioName: aFile.name,
-            videoDuration: formatDuration(videoDuration),
-            audioDuration: formatDuration(audioDuration),
-            outputDuration: formatDuration(actualDuration),
-            loopCount: computeLoopCount(videoDuration, audioDuration),
-            sizeBytes: blob.size,
-            downloadUrl: blobUrl,
-            previewUrl: blobUrl,
-            fileName: `LoopSync_${timestampName()}.mp4`,
-          });
-        } catch (err) {
-          console.error("LoopSync WASM error:", err);
-          console.error("Last ffmpeg logs:", err._ffmpegLogs || "(none)");
-          showToast(
-            "Não foi possível processar estes arquivos neste dispositivo. Tente um vídeo menor ou em outro formato (MP4/H.264).",
-            "error"
-          );
-          resetToEdit();
-          return;
-        }
-      }
-
+          setProgressText(text);
+        },
+      });
+      jobIdRef.current = generated.jobId || null;
+      if (generated.blobUrl) resultBlobUrlRef.current = generated.blobUrl;
+      setResult(generated);
+      setProgress(100);
       setScreen("result");
-    } catch (err) {
-      console.error("LoopSync:", err);
-      showToast(err && err.message ? err.message : "Não foi possível gerar o vídeo.", "error");
+    } catch (error) {
+      console.error("LoopSync:", error);
+      showToast(error && error.message ? error.message : "Não foi possível gerar o vídeo.", "error");
       resetToEdit();
     } finally {
       busyRef.current = false;
     }
-  }, [videoDuration, audioDuration, clearOldJob, resetToEdit, showToast]);
+  }, [audio, clearOldJob, mode, processPair, resetToEdit, showToast, visual]);
 
-  /* ── share ── */
   const shareResult = useCallback(async () => {
     if (!result) return;
-    const href = result.downloadUrl;
-    const fileName = result.fileName || "LoopSync.mp4";
+    const fileName = result.fileName || "video.mp4";
     try {
-      const response = await fetch(href);
+      const response = await fetch(result.blobUrl || result.downloadUrl);
       if (!response.ok) throw new Error("download");
       const blob = await response.blob();
       const file = new File([blob], fileName, { type: blob.type || "video/mp4" });
       if (navigator.canShare && navigator.canShare({ files: [file] })) {
-        const blobUrl = URL.createObjectURL(blob);
-        try {
-          await navigator.share({ files: [file], title: "LoopSync" });
-        } catch {
-          const a = document.createElement("a");
-          a.href = blobUrl;
-          a.download = fileName;
-          document.body.appendChild(a);
-          a.click();
-          a.remove();
-        } finally {
-          setTimeout(() => URL.revokeObjectURL(blobUrl), 30000);
-        }
+        await navigator.share({ files: [file], title: "LoopSync" });
         return;
       }
-      const a = document.createElement("a");
-      a.href = href;
-      a.download = fileName;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
     } catch {
-      const a = document.createElement("a");
-      a.href = href;
-      a.download = fileName;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
+      // Download fallback below.
     }
+    const anchor = document.createElement("a");
+    anchor.href = result.downloadUrl;
+    anchor.download = fileName;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
   }, [result]);
 
-  /* ─── RENDER ──────────────────────────────────────────────────── */
+  const sendToYouTube = useCallback(() => {
+    if (!result) return;
+    const item = result.jobId
+      ? { sourceJobId: result.jobId, name: result.fileName || "video.mp4", size: Number(result.sizeBytes || 0), previewUrl: result.previewUrl, title: "" }
+      : { file: result.file, name: result.fileName || "video.mp4", size: Number(result.sizeBytes || 0), previewUrl: result.previewUrl, title: "" };
+    setIncomingVideo(item);
+    navigate("youtube");
+  }, [navigate, result]);
+
+  const sendBatchToYouTube = useCallback((items) => {
+    if (!items || !items.length) return;
+    setIncomingVideo(items.length === 1 ? items[0] : { items });
+    navigate("youtube");
+  }, [navigate]);
 
   return (
     <main className="page">
-      {/* ── header ── */}
       <header className="hero">
         <div className="brand">
           <span className="brand-mark" aria-hidden="true">
             <svg viewBox="0 0 40 40" width="34" height="34" fill="none">
               <circle cx="20" cy="20" r="18" fill="#1d1a15" stroke="#ff8a3d" strokeWidth="2.5" />
               <path d="M16 13 L28 20 L16 27Z" fill="#ff8a3d" />
-              <path d="M12 10 A14 14 0 0 1 30 14" stroke="#ff8a3d" strokeWidth="2" strokeLinecap="round" fill="none" />
-              <path d="M28 30 A14 14 0 0 1 10 26" stroke="#ff8a3d" strokeWidth="2" strokeLinecap="round" fill="none" />
+              <path d="M12 10 A14 14 0 0 1 30 14" stroke="#ff8a3d" strokeWidth="2" strokeLinecap="round" />
+              <path d="M28 30 A14 14 0 0 1 10 26" stroke="#ff8a3d" strokeWidth="2" strokeLinecap="round" />
             </svg>
           </span>
-          <div>
-            <h1>LoopSync</h1>
-            <p>Vídeo + música. Automaticamente.</p>
-          </div>
+          <div><h1>LoopSync</h1><p>Vídeo + música. Automaticamente.</p></div>
         </div>
-        <span className="privacy-badge" title="O conteúdo é processado pelo serviço local do app e os arquivos temporários são apagados.">
-          🔒 Local &amp; privado
-        </span>
+        <span className="privacy-badge" title="Os arquivos temporários são apagados após o processamento.">🔒 Local &amp; privado</span>
       </header>
 
       <nav className="app-nav" aria-label="Áreas do LoopSync">
-        <button
-          type="button"
-          className={`nav-pill${area === "loopsync" ? " active" : ""}`}
-          data-testid="nav-loopsync"
-          onClick={() => navigate("loopsync")}
-          aria-current={area === "loopsync" ? "page" : undefined}
-        >
-          <span aria-hidden="true">🎬</span> LoopSync
-        </button>
-        <button
-          type="button"
-          className={`nav-pill${area === "youtube" ? " active" : ""}`}
-          data-testid="nav-youtube"
-          onClick={() => navigate("youtube")}
-          aria-current={area === "youtube" ? "page" : undefined}
-        >
-          <span aria-hidden="true">▶</span> YouTube
-        </button>
+        <button type="button" className={`nav-pill${area === "loopsync" ? " active" : ""}`} data-testid="nav-loopsync" onClick={() => navigate("loopsync")} aria-current={area === "loopsync" ? "page" : undefined}><span aria-hidden="true">🎬</span> LoopSync</button>
+        <button type="button" className={`nav-pill${area === "youtube" ? " active" : ""}`} data-testid="nav-youtube" onClick={() => navigate("youtube")} aria-current={area === "youtube" ? "page" : undefined}><span aria-hidden="true">▶</span> YouTube</button>
       </nav>
 
       {youtubeMounted ? (
         <div className="area-panel" data-testid="area-youtube" hidden={area !== "youtube"}>
-          <YouTube
-            showToast={showToast}
-            incomingVideo={incomingVideo}
-            onIncomingConsumed={() => setIncomingVideo(null)}
-          />
+          <YouTube showToast={showToast} incomingVideo={incomingVideo} onIncomingConsumed={() => setIncomingVideo(null)} />
         </div>
       ) : null}
 
       <div className="area-panel" data-testid="area-loopsync" hidden={area === "youtube"}>
-      <AnimatePresence mode="wait">
-        {/* ─── FORM SCREEN ─── */}
-        {screen === "form" && (
-          <motion.form
-            id="appForm"
-            key="form"
-            noValidate
-            onSubmit={(e) => { e.preventDefault(); generate(); }}
-            variants={stagger}
-            initial="hidden"
-            animate="show"
-            exit={{ opacity: 0, y: -20, transition: springTransition }}
-          >
-            <motion.div className="grid" variants={fadeUp}>
-              <motion.article
-                className={`card${videoCardSelected ? " selected" : ""}`}
-                data-card="video"
-                variants={childFadeUp}
-                whileHover={{ y: -4, transition: { duration: 0.2 } }}
-              >
-                <div className="card-head">
-                  <span className="card-icon" aria-hidden="true">🎬</span>
-                  <h2>Vídeo</h2>
+        <div className="mode-switch" role="group" aria-label="Modo de geração">
+          <button type="button" className={mode === "single" ? "active" : ""} data-testid="mode-single" aria-pressed={mode === "single"} onClick={() => chooseMode("single")}>Vídeo único</button>
+          <button type="button" className={mode === "batch" ? "active" : ""} data-testid="mode-batch" aria-pressed={mode === "batch"} onClick={() => chooseMode("batch")}>Em massa</button>
+        </div>
+
+        {mode === "batch" ? (
+          <Batch processPair={processPair} onSendToYouTube={sendBatchToYouTube} showToast={showToast} seed={batchSeed} imageSize={outputSize} onImageSizeChange={setOutputSize} />
+        ) : (
+          <AnimatePresence mode="wait">
+            {screen === "form" ? (
+              <motion.form id="appForm" key="form" noValidate onSubmit={(event) => { event.preventDefault(); generate(); }} variants={stagger} initial="hidden" animate="show" exit={{ opacity: 0, y: -20, transition: springTransition }}>
+                <motion.div className="grid" variants={fadeUp}>
+                  <motion.article className={`card${visual ? " selected" : ""}${dragTarget === "video" ? " drop-active" : ""}`} data-card="video" variants={childFadeUp} whileHover={{ y: -4, transition: { duration: 0.2 } }} {...dropHandlers("video")}>
+                    <div className="card-head"><span className="card-icon" aria-hidden="true">{visual?.kind === "image" ? "🖼️" : "🎬"}</span><h2>Vídeo ou imagem</h2></div>
+                    <p className="card-state">{visual ? (visual.kind === "image" ? "Imagem selecionada" : "Vídeo selecionado") : "Nenhum vídeo ou imagem selecionado"}</p>
+                    {visual ? <p className="card-file">{visual.name}</p> : null}
+                    {visual?.kind === "image" ? <p className="card-file-sub" data-testid="image-info">Foto {visual.width}×{visual.height} · vira um vídeo com a duração do áudio</p> : null}
+                    {visual?.kind === "image" ? <ImageSizePicker value={outputSize} onChange={setOutputSize} source={visual} idPrefix="singleImageSize" /> : null}
+                    <button type="button" className="btn subtle" data-testid="select-visual" onClick={() => videoInputRef.current?.click()}>Selecione vídeo ou imagem</button>
+                    <p className="card-drop-hint">ou arraste o arquivo para cá</p>
+                    <input ref={videoInputRef} type="file" id="videoInput" data-testid="loopsync-video-input" accept="video/*,image/*" hidden onChange={(event) => { receiveFiles(event.target.files, "video"); event.target.value = ""; }} />
+                  </motion.article>
+
+                  <motion.article className={`card${audio ? " selected" : ""}${dragTarget === "audio" ? " drop-active" : ""}`} data-card="audio" variants={childFadeUp} whileHover={{ y: -4, transition: { duration: 0.2 } }} {...dropHandlers("audio")}>
+                    <div className="card-head"><span className="card-icon" aria-hidden="true">🎵</span><h2>Áudio</h2></div>
+                    <p className="card-state">{audio ? "Áudio selecionado" : "Nenhum áudio selecionado"}</p>
+                    {audio ? <p className="card-file">{audio.name}</p> : null}
+                    <button type="button" className="btn subtle" data-testid="select-audio" onClick={() => audioInputRef.current?.click()}>Selecione áudio</button>
+                    <p className="card-drop-hint">ou arraste o arquivo para cá</p>
+                    <input ref={audioInputRef} type="file" id="audioInput" data-testid="loopsync-audio-input" accept="audio/*" hidden onChange={(event) => { receiveFiles(event.target.files, "audio"); event.target.value = ""; }} />
+                  </motion.article>
+                </motion.div>
+
+                <AnimatePresence>
+                  {bothReady ? (
+                    <motion.section className="info" id="infoPanel" aria-live="polite" initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={springTransition} style={{ overflow: "hidden" }}>
+                      <div className="info-row"><span>{visual.kind === "image" ? "Foto" : "Duração do vídeo"}</span><strong id="infoVideoDuration">{visual.kind === "image" ? `${visual.width}×${visual.height}` : formatDuration(visual.duration)}</strong></div>
+                      <div className="info-row"><span>Duração do áudio</span><strong id="infoAudioDuration">{formatDuration(audio.duration)}</strong></div>
+                      <div className="info-row"><span>{visual.kind === "image" ? "Loops (foto é fixa)" : "Loops necessários"}</span><strong id="infoLoops">{loops}</strong></div>
+                      <p className="info-note">Você pode gerar o resultado agora.</p>
+                    </motion.section>
+                  ) : null}
+                </AnimatePresence>
+
+                <motion.button type="submit" className="btn primary generate" id="generateBtn" disabled={!bothReady} variants={childFadeUp} whileTap={{ scale: 0.97 }}><span className="btn-label">Gerar vídeo</span><span className="btn-spinner" aria-hidden="true" /></motion.button>
+              </motion.form>
+            ) : null}
+
+            {screen === "processing" ? (
+              <motion.section className="panel processing" id="processingPanel" key="processing" aria-live="polite" initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} transition={springTransition}>
+                <div className="panel-title"><h2>Gerando seu vídeo...</h2><p>{visual?.kind === "image" ? "Gerando vídeo a partir da imagem" : "Repetindo vídeo até o final do áudio"}</p></div>
+                <div className="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow={Math.round(progress)}><motion.div className="progress-fill" initial={{ width: "0%" }} animate={{ width: `${Math.max(0, Math.min(100, Math.round(progress)))}%` }} /></div>
+                <p className="progress-text" id="progressText">{progressText}</p>
+                <div className="processing-spinner" aria-hidden="true"><motion.div className="spinner-ring" animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1.2, ease: "linear" }} /></div>
+                <p className="hint">O processamento acontece de forma assíncrona e não trava a interface.</p>
+              </motion.section>
+            ) : null}
+
+            {screen === "result" && result ? (
+              <motion.section className="panel result" id="resultPanel" key="result" aria-live="polite" initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} transition={springTransition}>
+                <div className="result-icon" aria-hidden="true">✅</div><h2>Vídeo criado com sucesso!</h2>
+                <p className="result-duration">Duração: <strong id="resultDuration">{result.outputDuration || result.audioDuration || "00:00"}</strong></p>
+                <div className="result-preview"><video id="resultVideo" ref={resultVideoRef} controls playsInline preload="metadata" src={result.previewUrl} /></div>
+                <div className="actions">
+                  <a className="btn primary" id="saveBtn" href={result.downloadUrl} download={result.fileName || "video.mp4"}>Salvar vídeo</a>
+                  <button type="button" className="btn subtle" id="shareBtn" onClick={shareResult}>Compartilhar</button>
+                  <button type="button" className="btn youtube" id="sendToYouTubeBtn" onClick={sendToYouTube}><span className="yt-mark" aria-hidden="true">▶</span> Enviar para o YouTube</button>
+                  <button type="button" className="btn ghost" id="resetBtn" onClick={resetAll}>Criar outro</button>
                 </div>
-                <p className="card-state">{videoCardSelected ? "Vídeo selecionado" : "Nenhum vídeo selecionado"}</p>
-                {videoName && <p className="card-file">{videoName}</p>}
-                <button type="button" className="btn subtle" onClick={() => videoInputRef.current?.click()}>Selecionar vídeo</button>
-                <input
-                  type="file"
-                  id="videoInput"
-                  accept="video/*"
-                  hidden
-                  ref={videoInputRef}
-                  onChange={(e) => onSelectVideo(e.target.files && e.target.files[0])}
-                />
-              </motion.article>
-
-              <motion.article
-                className={`card${audioCardSelected ? " selected" : ""}`}
-                data-card="audio"
-                variants={childFadeUp}
-                whileHover={{ y: -4, transition: { duration: 0.2 } }}
-              >
-                <div className="card-head">
-                  <span className="card-icon" aria-hidden="true">🎵</span>
-                  <h2>Áudio</h2>
-                </div>
-                <p className="card-state">{audioCardSelected ? "Áudio selecionado" : "Nenhum áudio selecionado"}</p>
-                {audioName && <p className="card-file">{audioName}</p>}
-                <button type="button" className="btn subtle" onClick={() => audioInputRef.current?.click()}>Selecionar áudio</button>
-                <input
-                  type="file"
-                  id="audioInput"
-                  accept="audio/*"
-                  hidden
-                  ref={audioInputRef}
-                  onChange={(e) => onSelectAudio(e.target.files && e.target.files[0])}
-                />
-              </motion.article>
-            </motion.div>
-
-            <AnimatePresence>
-              {infoExpanded && (
-                <motion.section
-                  className="info"
-                  id="infoPanel"
-                  aria-live="polite"
-                  initial={{ height: 0, opacity: 0 }}
-                  animate={{ height: "auto", opacity: 1 }}
-                  exit={{ height: 0, opacity: 0 }}
-                  transition={springTransition}
-                  style={{ overflow: "hidden" }}
-                >
-                  <motion.div variants={stagger} initial="hidden" animate="show">
-                    <motion.div className="info-row" variants={childFadeUp}>
-                      <span>Duração do vídeo</span>
-                      <strong id="infoVideoDuration">{formatDuration(videoDuration)}</strong>
-                    </motion.div>
-                    <motion.div className="info-row" variants={childFadeUp}>
-                      <span>Duração do áudio</span>
-                      <strong id="infoAudioDuration">{formatDuration(audioDuration)}</strong>
-                    </motion.div>
-                    <motion.div className="info-row" variants={childFadeUp}>
-                      <span>Loops necessários</span>
-                      <strong id="infoLoops">{String(loops)}</strong>
-                    </motion.div>
-                    <motion.p className="info-note" variants={childFadeUp}>Você pode gerar o resultado agora.</motion.p>
-                  </motion.div>
-                </motion.section>
-              )}
-            </AnimatePresence>
-
-            <motion.button
-              type="submit"
-              className="btn primary generate"
-              id="generateBtn"
-              disabled={!bothReady}
-              variants={childFadeUp}
-              whileTap={{ scale: 0.97 }}
-            >
-              <span className="btn-label">Gerar vídeo</span>
-              <span className="btn-spinner" aria-hidden="true"></span>
-            </motion.button>
-          </motion.form>
+                <p className="hint" id="resultMeta">{`Vídeo: ${result.videoDuration} · Áudio: ${result.audioDuration} · Loops: ${result.loopCount} · ${result.width || 0}×${result.height || 0} · ${(Number(result.sizeBytes || 0) / 1024 / 1024).toFixed(1)} MB`}</p>
+              </motion.section>
+            ) : null}
+          </AnimatePresence>
         )}
-
-        {/* ─── PROCESSING SCREEN ─── */}
-        {screen === "processing" && (
-          <motion.section
-            className="panel processing"
-            id="processingPanel"
-            key="processing"
-            aria-live="polite"
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.95, transition: springTransition }}
-            transition={springTransition}
-          >
-            <div className="panel-title">
-              <h2>Gerando seu vídeo...</h2>
-              <p>Repetindo vídeo até o final do áudio</p>
-            </div>
-            <div className="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow={Math.round(progress)}>
-              <motion.div
-                className="progress-fill"
-                initial={{ width: "0%" }}
-                animate={{ width: `${Math.max(0, Math.min(100, Math.round(progress)))}%` }}
-                transition={{ type: "spring", stiffness: 120, damping: 20 }}
-              />
-            </div>
-            <p className="progress-text" id="progressText">{progressText}</p>
-            <div className="processing-spinner" aria-hidden="true">
-              <motion.div
-                className="spinner-ring"
-                animate={{ rotate: 360 }}
-                transition={{ repeat: Infinity, duration: 1.2, ease: "linear" }}
-              />
-            </div>
-            <p className="hint">O processamento acontece de forma assíncrona e não trava a interface.</p>
-          </motion.section>
-        )}
-
-        {/* ─── RESULT SCREEN ─── */}
-        {screen === "result" && result && (
-          <motion.section
-            className="panel result"
-            id="resultPanel"
-            key="result"
-            aria-live="polite"
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.95, transition: springTransition }}
-            transition={springTransition}
-          >
-            <motion.div
-              className="result-icon"
-              aria-hidden="true"
-              initial={{ scale: 0 }}
-              animate={{ scale: 1 }}
-              transition={{ type: "spring", stiffness: 320, damping: 18, delay: 0.1 }}
-            >
-              ✅
-            </motion.div>
-            <h2>Vídeo criado com sucesso!</h2>
-            <p className="result-duration">Duração: <strong id="resultDuration">{result.outputDuration || result.audioDuration || "00:00"}</strong></p>
-
-            <motion.div
-              className="result-preview"
-              initial={{ opacity: 0, scale: 0.96 }}
-              animate={{ opacity: 1, scale: 1 }}
-              transition={{ ...springTransition, delay: 0.2 }}
-            >
-              <video
-                id="resultVideo"
-                ref={resultVideoRef}
-                controls
-                playsInline
-                preload="metadata"
-                src={result.previewUrl}
-              />
-            </motion.div>
-
-            <motion.div
-              className="actions"
-              initial={{ opacity: 0, y: 12 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ ...springTransition, delay: 0.3 }}
-            >
-              <a className="btn primary" id="saveBtn" href={result.downloadUrl} download={result.fileName || "LoopSync.mp4"} whileTap={{ scale: 0.97 }}>Salvar vídeo</a>
-              <button type="button" className="btn subtle" id="shareBtn" onClick={shareResult} whileTap={{ scale: 0.97 }}>Compartilhar</button>
-              <button type="button" className="btn youtube" id="sendToYouTubeBtn" onClick={sendToYouTube} whileTap={{ scale: 0.97 }}>
-                <span className="yt-mark" aria-hidden="true">▶</span> Enviar para o YouTube
-              </button>
-              <button type="button" className="btn ghost" id="resetBtn" onClick={resetAll} whileTap={{ scale: 0.97 }}>Criar outro</button>
-            </motion.div>
-            <p className="hint" id="resultMeta">
-              {`Video: ${result.videoDuration} · Áudio: ${result.audioDuration} · Loops: ${result.loopCount} · ${(result.sizeBytes / 1024 / 1024).toFixed(1)} MB`}
-            </p>
-          </motion.section>
-        )}
-      </AnimatePresence>
       </div>
 
-      {/* ── Toast ── */}
-      <AnimatePresence>
-        {toast && (
-          <motion.div
-            id="toast"
-            className={`toast${toastType === "error" ? " error" : ""}`}
-            role="status"
-            initial={{ opacity: 0, y: 24 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 18 }}
-            transition={springTransition}
-          >
-            {toast}
-          </motion.div>
-        )}
-      </AnimatePresence>
+      <AnimatePresence>{toast ? <motion.div id="toast" className={`toast${toastType === "error" ? " error" : ""}`} role="status" initial={{ opacity: 0, y: 24 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 18 }} transition={springTransition}>{toast}</motion.div> : null}</AnimatePresence>
     </main>
   );
 }
