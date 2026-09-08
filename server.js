@@ -10,6 +10,8 @@ const express = require("express");
 const multer = require("multer");
 
 const { generateSyncVideo, formatSeconds } = require("./lib/media");
+const { normalizeImageSize } = require("./lib/image-size");
+const { outputFileName, sanitizeBaseName, contentDisposition } = require("./lib/naming");
 const { getStore } = require("./lib/store");
 const { createYouTubeRouter } = require("./lib/youtube/routes");
 
@@ -46,11 +48,23 @@ function cleanupJob(job) {
   }
 }
 
+function decodeUploadedName(raw) {
+  if (!raw || !/[^\x00-\x7f]/.test(raw)) return raw;
+  const fixed = Buffer.from(raw, "latin1").toString("utf8");
+  return fixed.includes("\uFFFD") ? raw : fixed;
+}
+
 function extensionFor(file) {
-  const ext = path.extname(file.originalname || "").toLowerCase();
-  if (ext && ext.length <= 8) return ext;
-  if ((file.mimetype || "").startsWith("video/")) return ".mp4";
-  if ((file.mimetype || "").startsWith("audio/")) return ".m4a";
+  const originalName = decodeUploadedName(file.originalname || "");
+  const ext = path.extname(originalName).toLowerCase();
+  if (ext && ext.length <= 8 && /^\.[a-z0-9]+$/i.test(ext)) return ext;
+  const mime = String(file.mimetype || "").toLowerCase();
+  if (mime.startsWith("image/")) {
+    const subtype = mime.slice(6).split(/[;+]/)[0].replace("jpeg", "jpg");
+    return subtype && /^[a-z0-9]+$/.test(subtype) ? `.${subtype}` : ".png";
+  }
+  if (mime.startsWith("video/")) return ".mp4";
+  if (mime.startsWith("audio/")) return ".m4a";
   return ".bin";
 }
 
@@ -66,8 +80,9 @@ const upload = multer({
     },
     filename(req, file, cb) {
       const field = file.fieldname === "audio" ? "audio" : "video";
-      if (field === "video") req.loopsyncVideoName = file.originalname;
-      if (field === "audio") req.loopsyncAudioName = file.originalname;
+      const decodedName = decodeUploadedName(file.originalname);
+      if (field === "video") req.loopsyncVideoName = decodedName;
+      if (field === "audio") req.loopsyncAudioName = decodedName;
       cb(null, `${field}${extensionFor(file)}`);
     },
   }),
@@ -75,6 +90,7 @@ const upload = multer({
     fileSize: MAX_UPLOAD_BYTES,
     files: 2,
   },
+  defParamCharset: "utf8",
 });
 
 app.use(express.json({ limit: "1mb" }));
@@ -93,7 +109,7 @@ function resolveLocalFile(jobId) {
   job.timeout = setTimeout(() => cleanupJob(job), Math.max(RESULT_RETENTION_MS, 3 * 60 * 60 * 1000));
   return {
     path: job.outputPath,
-    name: job.result.fileName || `LoopSync_${jobId}.mp4`,
+    name: job.result.fileName || outputFileName(job.audioName),
     size: stat.size,
     mime: "video/mp4",
   };
@@ -126,7 +142,7 @@ app.post("/api/process", upload.fields([{ name: "video", maxCount: 1 }, { name: 
   const audio = req.files && req.files.audio && req.files.audio[0];
 
   if (!video) {
-    return res.status(400).json({ ok: false, error: "Selecione um vídeo." });
+    return res.status(400).json({ ok: false, error: "Selecione um vídeo ou uma imagem." });
   }
   if (!audio) {
     return res.status(400).json({ ok: false, error: "Selecione um áudio." });
@@ -139,8 +155,13 @@ app.post("/api/process", upload.fields([{ name: "video", maxCount: 1 }, { name: 
     videoPath: video.path,
     audioPath: audio.path,
     outputPath: path.join(req.loopsyncJobDir, "loopsync-result.mp4"),
-    videoName: req.loopsyncVideoName || video.originalname,
-    audioName: req.loopsyncAudioName || audio.originalname,
+    videoName: decodeUploadedName(req.loopsyncVideoName || video.originalname),
+    audioName: decodeUploadedName(req.loopsyncAudioName || audio.originalname),
+    imageSize: normalizeImageSize({
+      preset: "custom",
+      width: req.body && req.body.imageWidth,
+      height: req.body && req.body.imageHeight,
+    }),
     status: "queued",
     percent: 0,
     phase: "queued",
@@ -153,8 +174,8 @@ app.post("/api/process", upload.fields([{ name: "video", maxCount: 1 }, { name: 
   res.status(202).json({
     ok: true,
     id,
-    videoName: video.originalname,
-    audioName: audio.originalname,
+    videoName: decodeUploadedName(video.originalname),
+    audioName: decodeUploadedName(audio.originalname),
   });
 
   runJob(job).catch((err) => {
@@ -174,6 +195,7 @@ async function runJob(job) {
       videoPath: job.videoPath,
       audioPath: job.audioPath,
       outputPath: job.outputPath,
+      imageSize: job.imageSize,
       onProgress: (p) => {
         job.phase = p.phase;
         job.percent = Math.max(job.percent, p.percent || 0);
@@ -194,8 +216,13 @@ async function runJob(job) {
       sizeBytes: result.sizeBytes,
       withinTolerance: result.withinTolerance,
       differenceMs: result.durationDiffMs,
+      width: result.width,
+      height: result.height,
+      requestedWidth: result.requestedWidth,
+      requestedHeight: result.requestedHeight,
+      isImage: result.isImage,
       downloadUrl: `/api/result/${job.id}`,
-      fileName: `LoopSync_${timestampName(new Date())}.mp4`,
+      fileName: outputFileName(job.audioName),
     };
   } finally {
     // Remove the uploaded source files as soon as processing finishes; only
@@ -203,21 +230,6 @@ async function runJob(job) {
     try { fs.unlinkSync(job.videoPath); } catch { /* ignore */ }
     try { fs.unlinkSync(job.audioPath); } catch { /* ignore */ }
   }
-}
-
-function timestampName(date = new Date()) {
-  const pad = (n) => String(n).padStart(2, "0");
-  return [
-    date.getFullYear(),
-    "-",
-    pad(date.getMonth() + 1),
-    "-",
-    pad(date.getDate()),
-    "_",
-    pad(date.getHours()),
-    pad(date.getMinutes()),
-    pad(date.getSeconds()),
-  ].join("");
 }
 
 app.get("/api/process/:id", (req, res) => {
@@ -245,7 +257,10 @@ app.get("/api/result/:id", (req, res) => {
     return res.status(404).json({ ok: false, error: "O arquivo não está mais disponível." });
   }
 
-  const fileName = job.result.fileName || "LoopSync.mp4";
+  const requestedName = String(req.query.name || "").trim();
+  const fileName = requestedName
+    ? `${sanitizeBaseName(requestedName, { fallback: sanitizeBaseName(job.audioName) })}.mp4`
+    : job.result.fileName || outputFileName(job.audioName);
   const stat = fs.statSync(job.outputPath);
   const fileSize = stat.size;
 
@@ -258,11 +273,7 @@ app.get("/api/result/:id", (req, res) => {
 
   // ?inline=1 → Content-Disposition: inline (for preview player)
   const inline = req.query.inline === "1";
-  if (inline) {
-    res.setHeader("Content-Disposition", `inline; filename="${fileName}"`);
-  } else {
-    res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
-  }
+  res.setHeader("Content-Disposition", contentDisposition(inline ? "inline" : "attachment", fileName));
 
   // Range request support
   const rangeHeader = req.headers.range;
@@ -353,4 +364,4 @@ function shutdown(signal) {
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
 
-module.exports = { app, store };
+module.exports = { app, store, decodeUploadedName, extensionFor };

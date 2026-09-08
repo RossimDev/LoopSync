@@ -1,3 +1,5 @@
+import { imageScaleFilter, normalizeImageSize } from "./image-size.js";
+
 /**
  * LoopSync — processamento 100% no navegador com ffmpeg.wasm.
  * Portado como módulo ES para uso com Vite/React.
@@ -75,24 +77,32 @@ function extFor(file, fallback) {
   return m ? m[1] : fallback;
 }
 
-function buildArgs({ videoName, audioName, duration, videoDuration, copyVideo }) {
+export function buildArgs({
+  videoName,
+  audioName,
+  duration,
+  videoDuration,
+  copyVideo = true,
+  isImage = false,
+  imageSize = null,
+}) {
   const args = [];
-  if (videoDuration < duration) {
+  if (isImage) {
+    args.push("-loop", "1", "-framerate", "30");
+  } else if (videoDuration < duration) {
     args.push("-stream_loop", "-1");
   }
-  args.push("-i", videoName);
-  args.push("-i", audioName);
-  args.push("-map", "0:v:0");
-  args.push("-map", "1:a:0");
-  if (copyVideo) {
+  args.push("-i", videoName, "-i", audioName);
+  args.push("-map", "0:v:0", "-map", "1:a:0");
+  if (copyVideo && !isImage) {
     args.push("-c:v", "copy");
   } else {
     args.push("-c:v", "libx264", "-preset", "ultrafast", "-crf", "22", "-pix_fmt", "yuv420p");
+    if (isImage) args.push("-vf", imageScaleFilter(imageSize), "-r", "30");
   }
   args.push("-c:a", "aac", "-b:a", "192k");
   args.push("-t", String(duration));
-  args.push("-movflags", "+faststart");
-  args.push("output.mp4");
+  args.push("-movflags", "+faststart", "output.mp4");
   return args;
 }
 
@@ -118,7 +128,7 @@ function blobDuration(blob) {
  * Processa localmente. onProgress({ percent, text }).
  * Retorna { blob, actualDuration, usedCopy }.
  */
-export async function processInBrowser({ videoFile, audioFile, videoDuration, audioDuration, onProgress }) {
+export async function processInBrowser({ videoFile, audioFile, videoDuration, audioDuration, isImage = false, imageSize = null, onProgress }) {
   const report = (percent, text) => {
     if (typeof onProgress === "function") onProgress({ percent, text });
   };
@@ -133,7 +143,7 @@ export async function processInBrowser({ videoFile, audioFile, videoDuration, au
 
   const { fetchFile } = window.FFmpegUtil;
 
-  const videoName = `in_video.${extFor(videoFile, "mp4")}`;
+  const videoName = `in_video.${extFor(videoFile, isImage ? "png" : "mp4")}`;
   const audioName = `in_audio.${extFor(audioFile, "m4a")}`;
   const duration = audioDuration;
 
@@ -152,7 +162,11 @@ export async function processInBrowser({ videoFile, audioFile, videoDuration, au
     await ffmpeg.writeFile(videoName, await fetchFile(videoFile));
   } catch (err) {
     ffmpeg.off("log", onLog);
-    const friendly = new Error("Não foi possível ler o vídeo selecionado. Selecione o arquivo novamente.");
+    const friendly = new Error(
+      isImage
+        ? "Não foi possível ler a imagem selecionada. Selecione o arquivo novamente."
+        : "Não foi possível ler o vídeo selecionado. Selecione o arquivo novamente."
+    );
     friendly.code = "REREAD_VIDEO";
     throw friendly;
   }
@@ -169,7 +183,7 @@ export async function processInBrowser({ videoFile, audioFile, videoDuration, au
     const outSec = Number(time) / 1e6;
     if (Number.isFinite(outSec) && duration > 0) {
       const percent = Math.min(98, Math.max(10, Math.round((outSec / duration) * 100)));
-      report(percent, "Repetindo vídeo até o final do áudio…");
+      report(percent, isImage ? "Gerando vídeo a partir da imagem…" : "Repetindo vídeo até o final do áudio…");
     }
   };
   ffmpeg.on("progress", onFfmpegProgress);
@@ -184,7 +198,7 @@ export async function processInBrowser({ videoFile, audioFile, videoDuration, au
 
   try {
     const run = async (copyVideo) => {
-      const args = buildArgs({ videoName, audioName, duration, videoDuration, copyVideo });
+      const args = buildArgs({ videoName, audioName, duration, videoDuration, copyVideo, isImage, imageSize });
       const code = await ffmpeg.exec(args);
       if (code !== 0) throw new Error(`ffmpeg saiu com código ${code}`);
       const data = await ffmpeg.readFile("output.mp4");
@@ -192,25 +206,31 @@ export async function processInBrowser({ videoFile, audioFile, videoDuration, au
       return new Blob([data.buffer ? data.buffer : data], { type: "video/mp4" });
     };
 
-    let usedCopy = true;
+    let usedCopy = !isImage;
     let blob;
     try {
-      blob = await run(true);
+      blob = await run(!isImage);
     } catch {
-      // Try recoding
+      if (isImage) {
+        const last30 = logLines.slice(-30).join("\n");
+        console.error("=== ffmpeg log (últimas ~30 linhas) ===\n" + last30);
+        const friendly = new Error("Não foi possível gerar o vídeo a partir desta imagem neste dispositivo.");
+        friendly._ffmpegLogs = last30;
+        try { await ffmpeg.terminate(); } catch { /* ignore */ }
+        resetEngine();
+        throw friendly;
+      }
       usedCopy = false;
       report(10, "Recodificando para garantir compatibilidade…");
       try {
         blob = await run(false);
-      } catch (innerErr) {
-        // Both copy and recode failed — log last ~30 lines and terminate (Part 2.3)
+      } catch {
         const last30 = logLines.slice(-30).join("\n");
         console.error("=== ffmpeg log (últimas ~30 linhas) ===\n" + last30);
         const friendly = new Error(
           "Não foi possível processar estes arquivos neste dispositivo. Tente um vídeo menor ou em outro formato (MP4/H.264)."
         );
         friendly._ffmpegLogs = last30;
-        // Terminate and reset for next attempt
         try { await ffmpeg.terminate(); } catch { /* ignore */ }
         resetEngine();
         throw friendly;
@@ -232,10 +252,14 @@ export async function processInBrowser({ videoFile, audioFile, videoDuration, au
 
     report(99, "Finalizando…");
     ffmpeg.off("log", onLog);
+    const requestedSize = isImage ? normalizeImageSize(imageSize) : null;
     return {
       blob,
       actualDuration: Number.isFinite(actualDuration) ? actualDuration : duration,
       usedCopy,
+      isImage,
+      requestedWidth: requestedSize ? requestedSize.width : null,
+      requestedHeight: requestedSize ? requestedSize.height : null,
     };
   } finally {
     await cleanup();

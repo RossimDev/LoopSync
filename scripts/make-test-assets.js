@@ -29,6 +29,17 @@ async function createVideo(outPath, { duration, width = 640, height = 360 } = {}
   await run(ffmpegPath, ["-y", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", filters, "-c:v", "libx264", "-pix_fmt", "yuv420p", outPath]);
 }
 
+async function createImage(outPath, { width = 320, height = 180, color = "orange" } = {}) {
+  const filters = [
+    `color=c=${color}:s=${width}x${height}:d=0.04:r=25`,
+    `drawtext=text='LoopSync foto':fontcolor=white:fontsize=32:x=(w-text_w)/2:y=(h-text_h)/2`,
+  ].join(",");
+  await run(ffmpegPath, [
+    "-y", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", filters,
+    "-frames:v", "1", "-update", "1", outPath,
+  ]);
+}
+
 async function createAudio(outPath, { duration }) {
   await run(ffmpegPath, ["-y", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", `sine=frequency=440:duration=${duration}`, "-ac", "2", "-c:a", "aac", outPath]);
 }
@@ -41,6 +52,9 @@ async function createTestAssets(dir) {
     createVideo(path.join(dir, "video-15.mp4"), { duration: 15, width: 320, height: 180 }),
     createVideo(path.join(dir, "video-30.mp4"), { duration: 30, width: 320, height: 180 }),
     createVideo(path.join(dir, "video-60.mp4"), { duration: 60, width: 320, height: 180 }),
+    createImage(path.join(dir, "photo-test.png"), { width: 320, height: 180, color: "orange" }),
+    createImage(path.join(dir, "photo-test.jpg"), { width: 320, height: 180, color: "teal" }),
+    createAudio(path.join(dir, "audio-05.m4a"), { duration: 5 }),
     createAudio(path.join(dir, "audio-20.m4a"), { duration: 20 }),
     createAudio(path.join(dir, "audio-30.m4a"), { duration: 30 }),
     createAudio(path.join(dir, "audio-120.m4a"), { duration: 120 }),
@@ -57,7 +71,7 @@ async function main() {
 
   const files = [
     "video-05.mp4", "video-15.mp4", "video-30.mp4", "video-60.mp4",
-    "audio-20.m4a", "audio-30.m4a", "audio-120.m4a", "audio-135.m4a",
+    "photo-test.png", "photo-test.jpg", "audio-05.m4a", "audio-20.m4a", "audio-30.m4a", "audio-120.m4a", "audio-135.m4a",
   ];
 
   for (const file of files) {
@@ -68,4 +82,4 @@ async function main() {
 
 if (require.main === module) main().catch((e) => { console.error(e); process.exit(1); });
 
-module.exports = { createVideo, createAudio, createTestAssets };
+module.exports = { createVideo, createImage, createAudio, createTestAssets };

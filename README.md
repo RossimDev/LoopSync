@@ -1,14 +1,13 @@
 # LoopSync
 
-LoopSync junta **1 vídeo + 1 música** automaticamente:
+LoopSync junta **vídeo ou foto + música** automaticamente, em um item ou em lote:
 
-1. Você escolhe um vídeo e um arquivo de áudio/música.
-2. O app descobre as durações dos dois arquivos.
-3. O vídeo é repetido quantas vezes forem necessárias para cobrir a duração
-   do áudio.
-4. O último loop é cortado **exatamente** no ponto em que o áudio termina.
-5. O resultado é um **MP4 real**, com a música como única trilha sonora e
-   duração **exatamente igual** à duração do áudio.
+1. Você escolhe um vídeo (ou uma foto) e um arquivo de áudio/música.
+2. O app descobre duração e resolução dos arquivos.
+3. O vídeo é repetido quantas vezes forem necessárias; a foto permanece fixa.
+4. O resultado termina **exatamente** no ponto em que o áudio termina.
+5. O app gera um **MP4 real**, nomeado a partir do áudio, com a música como
+   única trilha sonora e duração **exatamente igual** à duração do áudio.
 
 Nenhuma edição criativa é feita no vídeo: apenas *repetir → repetir →
 cortar o final quando necessário*. Sem filtros, transições, zoom, textos,
@@ -21,9 +20,16 @@ watermarks, beat sync ou qualquer efeito.
 - **Vídeo mais longo que o áudio:** nenhuma repetição; apenas os primeiros N
   segundos do vídeo são usados.
 - **Vídeo com a mesma duração do áudio:** usado uma única vez, sem repetição.
+- **Foto:** vira um vídeo fixo com a duração do áudio; é possível manter a
+  resolução original ou escolher formatos horizontais, verticais, quadrados e
+  personalizados (sem esticar ou cortar a imagem).
+- **Modo Em massa:** combina vários vídeos/fotos e áudios, gera a fila
+  sequencialmente e permite baixar ou enviar todos para o YouTube.
 - **Vídeo com áudio próprio:** o áudio original **não** é usado; o arquivo de
   áudio escolhido pelo usuário é a trilha final.
 - **Duração final:** sempre igual à duração do áudio.
+- **Nome final:** deriva do nome de cada áudio, com sanitização Unicode e
+  sufixos `(2)`, `(3)` etc. quando há colisões.
 
 ## Tecnologia
 
@@ -47,17 +53,16 @@ O app detecta automaticamente onde está rodando (via `/health`):
   **100% no navegador do usuário** com ffmpeg.wasm. Os arquivos nunca saem
   do dispositivo — privacidade máxima.
 
-Nos dois modos a operação é idêntica:
+Nos dois modos a operação é equivalente:
 
-1. recebe temporariamente os dois arquivos selecionados;
-2. descobre as durações com `ffprobe`;
-3. monta a sequência de loop usando `-stream_loop` e encerra o vídeo no tempo
-   exato do áudio com `-t`;
-4. mapeia somente o vídeo do arquivo de vídeo (`0:v:0`) e o áudio do arquivo
-   de áudio (`1:a:0`);
-5. exporta em MP4 (`-c:v copy` quando possível, senão `libx264` + AAC);
-6. apaga os arquivos temporários assim que o processamento termina e o
-   resultado é baixado.
+1. recebe temporariamente os arquivos selecionados;
+2. descobre duração, streams e resolução (com `ffprobe` no servidor);
+3. para vídeo, usa `-stream_loop` quando necessário; para foto, cria um stream
+   fixo de 30 fps e aplica a resolução escolhida com *scale + pad*;
+4. encerra o resultado no tempo exato do áudio com `-t`;
+5. mapeia somente o visual (`0:v:0`) e o áudio escolhido (`1:a:0`);
+6. exporta em MP4 (`-c:v copy` quando possível para vídeos, ou `libx264` + AAC);
+7. apaga os arquivos temporários depois do processamento/download.
 
 ### Privacidade
 
@@ -164,43 +169,46 @@ completo de ffmpeg, conferindo que cada MP4 gerado é válido e que a duração
 final coincide com a do áudio.
 
 ```bash
-npm test                  # pipeline de mídia (ffmpeg): 5 cenários
-npm run test:youtube      # integração do módulo YouTube + API do Google: 41 verificações
-npm run test:youtube:ui   # interface React real em jsdom, fluxo completo: 129 verificações
-npm run test:youtube:browser  # E2E em Chromium (layout mobile/desktop + capturas)
-npm run test:all          # mídia + integração + interface
+npm test                     # pipeline de mídia: 10 cenários + utilitários CJS/ESM
+npm run test:loopsync:ui     # interface principal + servidor + ffmpeg reais: 70 verificações
+npm run test:youtube         # integração do YouTube + API do Google: 41 verificações
+npm run test:youtube:ui      # interface completa do YouTube: 129 verificações
+npm run test:youtube:browser # E2E em Chromium (layout mobile/desktop + capturas)
+npm run test:all             # mídia + ambas as integrações e interfaces
 ```
 
 ### Pipeline de mídia
 
-Cenários verificados:
-
-| Teste | Vídeo | Áudio | Comportamento esperado |
-| --- | --- | --- | --- |
-| 1 | 15s | 2min | loop até 2min exatos |
-| 2 | 30s | 2min15s | 4 loops completos + 15s do quinto |
-| 3 | 1min | 20s | corta para os primeiros 20s |
-| 4 | 30s | 30s | sem repetição |
+São verificados cinco cenários de vídeo (repetição, corte e duração igual) e
+cinco cenários de foto: PNG/JPG na resolução original, saída vertical
+1080×1920, quadrada 1080×1080 e tamanho personalizado normalizado para lados
+pares. Todos passam por ffmpeg e ffprobe reais.
 
 ## Estrutura
 
 ```
 server.js                   # servidor Express + endpoints de processamento
-lib/media.js                # núcleo de mídia (ffprobe + ffmpeg + validação)
+lib/media.js                # núcleo de mídia (ffprobe + ffmpeg + foto/vídeo)
+lib/image-size.js           # resolução de foto (CJS; espelho ESM em src/lib)
+lib/naming.js               # nomes/Content-Disposition (CJS; espelho ESM)
 lib/store.js                # banco local em JSON (sessões, conexão, bibliotecas, uploads)
 lib/youtube/client.js       # OAuth 2.0 (PKCE) + YouTube Data API v3
 lib/youtube/resumable.js    # motor de upload resumível (blocos, retomada, retries)
 lib/youtube/routes.js       # rotas /api/youtube/*
 lib/youtube/tags.js         # sugestões de tags
 lib/youtube/templates.js    # modelos prontos de metadados
-src/App.jsx                 # interface (navegação LoopSync / YouTube)
+src/App.jsx                 # fluxo único, fallback wasm, DnD e navegação
+src/Batch.jsx               # fila de processamento em massa
+src/ImageSizePicker.jsx     # seletor de resolução das fotos
+src/lib/                    # utilitários ESM compartilhados e motor wasm
 src/youtube/                # UI do módulo YouTube (uploader, biblioteca, histórico, conexão)
 docs/YOUTUBE_SETUP.md       # guia de configuração do Google Cloud + primeiro upload
 .env.example                # modelo de variáveis de ambiente
 scripts/make-test-assets.js # gera mídia de teste sintética
 scripts/mock-google.js      # mock dos endpoints do Google (somente testes)
-scripts/validate.js         # validação automatizada dos 4 cenários de mídia
+scripts/validate.js         # 10 cenários reais + concordância CJS/ESM
 scripts/validate-youtube.js # validação do módulo YouTube (backend + API)
-scripts/test-youtube-ui.js  # validação da interface em jsdom
+scripts/test-loopsync-ui.js # interface principal com servidor/ffmpeg reais
+scripts/test-youtube-ui.js  # validação da interface do YouTube em jsdom
 scripts/test-youtube-browser.js # E2E em Chromium
 ```

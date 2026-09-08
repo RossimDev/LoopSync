@@ -12,7 +12,8 @@
     "test:youtube": "node scripts/validate-youtube.js",
     "test:youtube:ui": "node scripts/test-youtube-ui.js",
     "test:youtube:browser": "node scripts/test-youtube-browser.js",
-    "test:all": "node scripts/validate.js && node scripts/validate-youtube.js && node scripts/test-youtube-ui.js"
+    "test:all": "node scripts/validate.js && node scripts/validate-youtube.js && node scripts/test-youtube-ui.js && node scripts/test-loopsync-ui.js",
+    "test:loopsync:ui": "node scripts/test-loopsync-ui.js"
   },
   "repository": {
     "type": "git",
