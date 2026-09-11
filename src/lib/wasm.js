@@ -1,4 +1,5 @@
 import { imageScaleFilter, normalizeImageSize } from "./image-size.js";
+import { resolveAudioQuality, resolveVideoQuality } from "./quality.js";
 
 /**
  * LoopSync — processamento 100% no navegador com ffmpeg.wasm.
@@ -85,6 +86,8 @@ export function buildArgs({
   copyVideo = true,
   isImage = false,
   imageSize = null,
+  videoCrf = 22,
+  audioBitrate = "192k",
 }) {
   const args = [];
   if (isImage) {
@@ -97,10 +100,10 @@ export function buildArgs({
   if (copyVideo && !isImage) {
     args.push("-c:v", "copy");
   } else {
-    args.push("-c:v", "libx264", "-preset", "ultrafast", "-crf", "22", "-pix_fmt", "yuv420p");
+    args.push("-c:v", "libx264", "-preset", "ultrafast", "-crf", String(videoCrf), "-pix_fmt", "yuv420p");
     if (isImage) args.push("-vf", imageScaleFilter(imageSize), "-r", "30");
   }
-  args.push("-c:a", "aac", "-b:a", "192k");
+  args.push("-c:a", "aac", "-b:a", audioBitrate);
   args.push("-t", String(duration));
   args.push("-movflags", "+faststart", "output.mp4");
   return args;
@@ -128,7 +131,7 @@ function blobDuration(blob) {
  * Processa localmente. onProgress({ percent, text }).
  * Retorna { blob, actualDuration, usedCopy }.
  */
-export async function processInBrowser({ videoFile, audioFile, videoDuration, audioDuration, isImage = false, imageSize = null, onProgress }) {
+export async function processInBrowser({ videoFile, audioFile, videoDuration, audioDuration, isImage = false, imageSize = null, videoQuality = null, audioQuality = null, onProgress }) {
   const report = (percent, text) => {
     if (typeof onProgress === "function") onProgress({ percent, text });
   };
@@ -146,6 +149,13 @@ export async function processInBrowser({ videoFile, audioFile, videoDuration, au
   const videoName = `in_video.${extFor(videoFile, isImage ? "png" : "mp4")}`;
   const audioName = `in_audio.${extFor(audioFile, "m4a")}`;
   const duration = audioDuration;
+
+  // Qualidade escolhida ANTES de criar (mesma resolução do servidor).
+  const videoPreset = resolveVideoQuality(videoQuality);
+  const audioPreset = resolveAudioQuality(audioQuality);
+  const bitrate = audioPreset.bitrate;
+  const crf = videoPreset.crf == null ? 22 : videoPreset.crf;
+  const preferCopy = !isImage && videoPreset.copyVideo;
 
   // Capture ffmpeg logs for debugging on failure
   const logLines = [];
@@ -198,7 +208,7 @@ export async function processInBrowser({ videoFile, audioFile, videoDuration, au
 
   try {
     const run = async (copyVideo) => {
-      const args = buildArgs({ videoName, audioName, duration, videoDuration, copyVideo, isImage, imageSize });
+      const args = buildArgs({ videoName, audioName, duration, videoDuration, copyVideo, isImage, imageSize, videoCrf: crf, audioBitrate: bitrate });
       const code = await ffmpeg.exec(args);
       if (code !== 0) throw new Error(`ffmpeg saiu com código ${code}`);
       const data = await ffmpeg.readFile("output.mp4");
@@ -206,15 +216,19 @@ export async function processInBrowser({ videoFile, audioFile, videoDuration, au
       return new Blob([data.buffer ? data.buffer : data], { type: "video/mp4" });
     };
 
-    let usedCopy = !isImage;
+    let usedCopy = preferCopy;
     let blob;
     try {
-      blob = await run(!isImage);
+      blob = await run(preferCopy);
     } catch {
-      if (isImage) {
+      if (isImage || !preferCopy) {
         const last30 = logLines.slice(-30).join("\n");
         console.error("=== ffmpeg log (últimas ~30 linhas) ===\n" + last30);
-        const friendly = new Error("Não foi possível gerar o vídeo a partir desta imagem neste dispositivo.");
+        const friendly = new Error(
+          isImage
+            ? "Não foi possível gerar o vídeo a partir desta imagem neste dispositivo."
+            : "Não foi possível processar estes arquivos neste dispositivo. Tente um vídeo menor ou em outro formato (MP4/H.264)."
+        );
         friendly._ffmpegLogs = last30;
         try { await ffmpeg.terminate(); } catch { /* ignore */ }
         resetEngine();
@@ -258,6 +272,8 @@ export async function processInBrowser({ videoFile, audioFile, videoDuration, au
       actualDuration: Number.isFinite(actualDuration) ? actualDuration : duration,
       usedCopy,
       isImage,
+      videoQuality: videoPreset.id,
+      audioQuality: audioPreset.id,
       requestedWidth: requestedSize ? requestedSize.width : null,
       requestedHeight: requestedSize ? requestedSize.height : null,
     };

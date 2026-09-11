@@ -147,7 +147,18 @@ Opcional (recomendado em produção):
 ```bash
 GOOGLE_REDIRECT_URI=https://seudominio.com/api/youtube/auth/callback
 LOOPSYNC_COOKIE_SECURE=1
+LOOPSYNC_SESSION_SECRET=<chave aleatória com pelo menos 32 caracteres>
 ```
+
+O `LOOPSYNC_SESSION_SECRET` assina o cookie de sessão com HMAC-SHA256.
+Gere uma chave fixa com, por exemplo:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+```
+
+Em produção defina uma chave **fixa e secreta** (para as sessões sobreviverem
+a reinícios do servidor). Sem a variável o cookie não é assinado.
 
 Sem `GOOGLE_REDIRECT_URI` o LoopSync **deriva** o URI da origem da requisição
 (`x-forwarded-proto` / `x-forwarded-host` quando atrás de proxy) — prático em
@@ -326,7 +337,8 @@ O que o módulo **faz**:
   `ownerId`; renova automaticamente quando expiram (inclusive no meio de um
   upload).
 - Usa cookie de sessão **httpOnly** (e `Secure` quando
-  `LOOPSYNC_COOKIE_SECURE=1`).
+  `LOOPSYNC_COOKIE_SECURE=1`), assinado com HMAC-SHA256 quando
+  `LOOPSYNC_SESSION_SECRET` está definido.
 - Valida tamanho de bloco, tipo de arquivo, metadados e limites oficiais
   (título 100, descrição 5000, tags 500 caracteres).
 - Ao **desconectar**, chama `token.revoke` no Google e apaga as credenciais do

@@ -107,6 +107,15 @@ h1 { font-size: clamp(24px,4vw,34px); letter-spacing: -.03em; font-weight: 800; 
 .image-size-custom > span { padding-bottom: 10px; color: var(--muted); }
 .image-size-summary { margin-top: 9px; color: var(--muted); font-size: 11px; line-height: 1.45; }
 
+.quality-wrap { margin-top: 16px; }
+.quality-picker { width: 100%; padding: 14px; background: rgba(0,0,0,.18); border: 1px solid var(--border); border-radius: 13px; }
+.quality-picker-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.quality-field { display: flex; flex-direction: column; gap: 6px; }
+.quality-label { color: var(--text); font-weight: 700; font-size: 13px; }
+.quality-picker select { width: 100%; min-height: 40px; border: 1px solid var(--border); border-radius: 10px; background: #171410; color: var(--text); padding: 8px 10px; }
+.quality-note { margin-top: 10px; color: var(--muted); font-size: 11px; line-height: 1.45; }
+.batch > .quality-picker { max-width: 680px; margin: 0 auto 16px; }
+
 /* Modo em massa */
 .batch { width: min(1120px,calc(100vw - 32px)); position: relative; left: 50%; transform: translateX(-50%); }
 .batch-input-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
@@ -179,4 +188,5 @@ h1 { font-size: clamp(24px,4vw,34px); letter-spacing: -.03em; font-weight: 800; 
   .batch { width: calc(100vw - 20px); }
   .batch-box, .batch-rows { padding: 13px; }
   .batch-row-actions .btn { flex: 1 1 calc(50% - 7px); }
+  .quality-picker-grid { grid-template-columns: 1fr; }
 }

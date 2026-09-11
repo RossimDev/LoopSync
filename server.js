@@ -11,6 +11,7 @@ const multer = require("multer");
 
 const { generateSyncVideo, formatSeconds } = require("./lib/media");
 const { normalizeImageSize } = require("./lib/image-size");
+const { normalizeAudioQuality, normalizeVideoQuality } = require("./lib/quality");
 const { outputFileName, sanitizeBaseName, contentDisposition } = require("./lib/naming");
 const { getStore } = require("./lib/store");
 const { createYouTubeRouter } = require("./lib/youtube/routes");
@@ -162,6 +163,8 @@ app.post("/api/process", upload.fields([{ name: "video", maxCount: 1 }, { name: 
       width: req.body && req.body.imageWidth,
       height: req.body && req.body.imageHeight,
     }),
+    videoQuality: normalizeVideoQuality(req.body && req.body.videoQuality),
+    audioQuality: normalizeAudioQuality(req.body && req.body.audioQuality),
     status: "queued",
     percent: 0,
     phase: "queued",
@@ -196,6 +199,8 @@ async function runJob(job) {
       audioPath: job.audioPath,
       outputPath: job.outputPath,
       imageSize: job.imageSize,
+      videoQuality: job.videoQuality,
+      audioQuality: job.audioQuality,
       onProgress: (p) => {
         job.phase = p.phase;
         job.percent = Math.max(job.percent, p.percent || 0);
@@ -221,6 +226,9 @@ async function runJob(job) {
       requestedWidth: result.requestedWidth,
       requestedHeight: result.requestedHeight,
       isImage: result.isImage,
+      videoQuality: result.videoQuality,
+      audioQuality: result.audioQuality,
+      audioBitrate: result.audioBitrate,
       downloadUrl: `/api/result/${job.id}`,
       fileName: outputFileName(job.audioName),
     };
