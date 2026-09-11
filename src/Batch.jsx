@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ImageSizePicker from "./ImageSizePicker.jsx";
+import QualityPicker from "./QualityPicker.jsx";
 import { kindOfFile, loadImageSize, loadVideoMeta, loadAudioDuration } from "./lib/files.js";
 import { formatDuration } from "./lib/format.js";
 import { outputFileName } from "./lib/naming.js";
@@ -47,6 +48,10 @@ export default function Batch({
   seed = null,
   imageSize,
   onImageSizeChange,
+  videoQuality,
+  onVideoQualityChange,
+  audioQuality,
+  onAudioQualityChange,
 }) {
   const [visuals, setVisuals] = useState([]);
   const [audios, setAudios] = useState([]);
@@ -463,6 +468,15 @@ export default function Batch({
           idPrefix="batchImageSize"
         />
       ) : null}
+
+      <QualityPicker
+        videoQuality={videoQuality}
+        onVideoQualityChange={onVideoQualityChange}
+        audioQuality={audioQuality}
+        onAudioQualityChange={onAudioQualityChange}
+        disabled={busy}
+        idPrefix="batchQuality"
+      />
 
       <section className="batch-rows" data-testid="batch-rows">
         <header className="batch-rows-head">

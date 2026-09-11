@@ -23,6 +23,9 @@ watermarks, beat sync ou qualquer efeito.
 - **Foto:** vira um vídeo fixo com a duração do áudio; é possível manter a
   resolução original ou escolher formatos horizontais, verticais, quadrados e
   personalizados (sem esticar ou cortar a imagem).
+- **Qualidade:** antes de criar você escolhe a qualidade do **vídeo**
+  (automática/cópia do original, ou recodificação por CRF) e do **áudio**
+  (bitrate AAC de 96 a 320 kbps) — vale para o modo único e para o lote.
 - **Modo Em massa:** combina vários vídeos/fotos e áudios, gera a fila
   sequencialmente e permite baixar ou enviar todos para o YouTube.
 - **Vídeo com áudio próprio:** o áudio original **não** é usado; o arquivo de
@@ -61,7 +64,8 @@ Nos dois modos a operação é equivalente:
    fixo de 30 fps e aplica a resolução escolhida com *scale + pad*;
 4. encerra o resultado no tempo exato do áudio com `-t`;
 5. mapeia somente o visual (`0:v:0`) e o áudio escolhido (`1:a:0`);
-6. exporta em MP4 (`-c:v copy` quando possível para vídeos, ou `libx264` + AAC);
+6. exporta em MP4 (`-c:v copy` quando possível para vídeos, ou `libx264` + AAC
+   com a qualidade escolhida — CRF do vídeo e bitrate do áudio);
 7. apaga os arquivos temporários depois do processamento/download.
 
 ### Privacidade
@@ -190,6 +194,7 @@ pares. Todos passam por ffmpeg e ffprobe reais.
 server.js                   # servidor Express + endpoints de processamento
 lib/media.js                # núcleo de mídia (ffprobe + ffmpeg + foto/vídeo)
 lib/image-size.js           # resolução de foto (CJS; espelho ESM em src/lib)
+lib/quality.js              # presets de qualidade (CJS; espelho ESM em src/lib)
 lib/naming.js               # nomes/Content-Disposition (CJS; espelho ESM)
 lib/store.js                # banco local em JSON (sessões, conexão, bibliotecas, uploads)
 lib/youtube/client.js       # OAuth 2.0 (PKCE) + YouTube Data API v3
@@ -200,6 +205,7 @@ lib/youtube/templates.js    # modelos prontos de metadados
 src/App.jsx                 # fluxo único, fallback wasm, DnD e navegação
 src/Batch.jsx               # fila de processamento em massa
 src/ImageSizePicker.jsx     # seletor de resolução das fotos
+src/QualityPicker.jsx       # seletor de qualidade de áudio e vídeo
 src/lib/                    # utilitários ESM compartilhados e motor wasm
 src/youtube/                # UI do módulo YouTube (uploader, biblioteca, histórico, conexão)
 docs/YOUTUBE_SETUP.md       # guia de configuração do Google Cloud + primeiro upload

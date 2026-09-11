@@ -14,6 +14,7 @@ const {
 } = require("../lib/media");
 const naming = require("../lib/naming");
 const imageSize = require("../lib/image-size");
+const quality = require("../lib/quality");
 const { createTestAssets } = require("./make-test-assets");
 
 let logicChecks = 0;
@@ -134,6 +135,7 @@ async function validateClientLogic(root) {
         export { kindOfFile } from ${JSON.stringify(path.join(__dirname, "../src/lib/files.js"))};
         export * as naming from ${JSON.stringify(path.join(__dirname, "../src/lib/naming.js"))};
         export * as imageSize from ${JSON.stringify(path.join(__dirname, "../src/lib/image-size.js"))};
+        export * as quality from ${JSON.stringify(path.join(__dirname, "../src/lib/quality.js"))};
       `,
       sourcefile: "client-logic-entry.js",
       resolveDir: path.join(__dirname, ".."),
@@ -181,6 +183,22 @@ async function validateClientLogic(root) {
   deepEqual(names.map((name) => client.naming.outputFileName(name)), names.map((name) => naming.outputFileName(name)), "nomes CJS e ESM concordam");
   const sizes = [null, { preset: "original" }, { preset: "custom", width: "641", height: "361" }, { width: 9000, height: 4 }];
   deepEqual(sizes.map((size) => client.imageSize.normalizeImageSize(size)), sizes.map((size) => imageSize.normalizeImageSize(size)), "tamanhos CJS e ESM concordam");
+
+  // Qualidade: presets e resolução devem concordar entre servidor e navegador.
+  deepEqual(client.quality.AUDIO_QUALITY_PRESETS, quality.AUDIO_QUALITY_PRESETS, "presets de áudio CJS e ESM concordam");
+  deepEqual(client.quality.VIDEO_QUALITY_PRESETS, quality.VIDEO_QUALITY_PRESETS, "presets de vídeo CJS e ESM concordam");
+  const audioIds = [undefined, null, "96", "192", "320", "xpto"];
+  deepEqual(audioIds.map((id) => client.quality.resolveAudioBitrate(id)), audioIds.map((id) => quality.resolveAudioBitrate(id)), "bitrate de áudio CJS e ESM concordam");
+  const videoIds = [undefined, null, "auto", "best", "balanced", "compact", "xpto"];
+  deepEqual(videoIds.map((id) => client.quality.resolveVideoQuality(id)), videoIds.map((id) => quality.resolveVideoQuality(id)), "qualidade de vídeo CJS e ESM concordam");
+  equal(client.quality.resolveVideoQuality("auto").copyVideo, true, "qualidade automática prefere cópia");
+  equal(client.quality.resolveVideoQuality("best").copyVideo, false, "qualidade explícita recodifica");
+  equal(client.quality.resolveAudioBitrate("256"), "256k", "bitrate de áudio resolvido");
+
+  const crfArgs = client.buildArgs({ videoName: "in.mp4", audioName: "in.m4a", duration: 10, videoDuration: 60, copyVideo: false, videoCrf: 28, audioBitrate: "320k" });
+  check(crfArgs.includes("-crf") && crfArgs[crfArgs.indexOf("-crf") + 1] === "28", "CRF explícito aplicado na recodificação");
+  check(crfArgs.includes("-b:a") && crfArgs[crfArgs.indexOf("-b:a") + 1] === "320k", "bitrate de áudio escolhido aplicado");
+
   await esbuild.stop();
 }
 

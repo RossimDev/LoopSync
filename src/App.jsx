@@ -5,7 +5,9 @@ import { kindOfFile, loadImageSize, loadVideoMeta, loadAudioDuration } from "./l
 import { formatDuration } from "./lib/format.js";
 import { outputFileName } from "./lib/naming.js";
 import { DEFAULT_IMAGE_SIZE, normalizeImageSize, even } from "./lib/image-size.js";
+import { DEFAULT_AUDIO_QUALITY, DEFAULT_VIDEO_QUALITY, videoQualityShort, audioQualityShort } from "./lib/quality.js";
 import ImageSizePicker from "./ImageSizePicker.jsx";
+import QualityPicker from "./QualityPicker.jsx";
 import Batch from "./Batch.jsx";
 import YouTube from "./youtube/YouTube.jsx";
 import "./youtube.css";
@@ -108,6 +110,8 @@ export default function App() {
   const [mode, setMode] = useState("single");
   const [batchSeed, setBatchSeed] = useState(null);
   const [outputSize, setOutputSize] = useState(DEFAULT_IMAGE_SIZE);
+  const [videoQuality, setVideoQuality] = useState(DEFAULT_VIDEO_QUALITY);
+  const [audioQuality, setAudioQuality] = useState(DEFAULT_AUDIO_QUALITY);
   const [screen, setScreen] = useState("form");
   const [visual, setVisual] = useState(null);
   const [audio, setAudio] = useState(null);
@@ -288,6 +292,8 @@ export default function App() {
       const form = new FormData();
       form.append("video", visualItem.file, visualItem.file.name);
       form.append("audio", audioItem.file, audioItem.file.name);
+      form.append("videoQuality", videoQuality);
+      form.append("audioQuality", audioQuality);
       if (selectedSize) {
         form.append("imageWidth", String(selectedSize.width));
         form.append("imageHeight", String(selectedSize.height));
@@ -318,6 +324,8 @@ export default function App() {
         loopCount: serverResult.loopCount,
         videoDuration: serverResult.videoDuration,
         audioDuration: serverResult.audioDuration,
+        videoQuality: serverResult.videoQuality || videoQuality,
+        audioQuality: serverResult.audioQuality || audioQuality,
         fileName,
       };
     }
@@ -332,6 +340,8 @@ export default function App() {
       audioDuration: audioItem.duration,
       isImage: visualItem.kind === "image",
       imageSize: outputSize,
+      videoQuality,
+      audioQuality,
       onProgress: ({ percent, text }) => report(percent, text),
     });
     const blobUrl = URL.createObjectURL(browserResult.blob);
@@ -350,10 +360,12 @@ export default function App() {
       loopCount: visualItem.kind === "image" ? 1 : computeLoopCount(visualItem.duration, audioItem.duration),
       videoDuration: formatDuration(visualItem.duration),
       audioDuration: formatDuration(audioItem.duration),
+      videoQuality: browserResult.videoQuality || videoQuality,
+      audioQuality: browserResult.audioQuality || audioQuality,
       file,
       fileName,
     };
-  }, [outputSize]);
+  }, [outputSize, videoQuality, audioQuality]);
 
   const visualReady = visual && (visual.kind === "image" ? Boolean(visual.file) : Number.isFinite(visual.duration));
   const audioReady = audio && Number.isFinite(audio.duration);
@@ -378,6 +390,8 @@ export default function App() {
     setAudio(null);
     setResult(null);
     setOutputSize(DEFAULT_IMAGE_SIZE);
+    setVideoQuality(DEFAULT_VIDEO_QUALITY);
+    setAudioQuality(DEFAULT_AUDIO_QUALITY);
     if (videoInputRef.current) videoInputRef.current.value = "";
     if (audioInputRef.current) audioInputRef.current.value = "";
     resetToEdit();
@@ -492,7 +506,18 @@ export default function App() {
         </div>
 
         {mode === "batch" ? (
-          <Batch processPair={processPair} onSendToYouTube={sendBatchToYouTube} showToast={showToast} seed={batchSeed} imageSize={outputSize} onImageSizeChange={setOutputSize} />
+          <Batch
+            processPair={processPair}
+            onSendToYouTube={sendBatchToYouTube}
+            showToast={showToast}
+            seed={batchSeed}
+            imageSize={outputSize}
+            onImageSizeChange={setOutputSize}
+            videoQuality={videoQuality}
+            onVideoQualityChange={setVideoQuality}
+            audioQuality={audioQuality}
+            onAudioQualityChange={setAudioQuality}
+          />
         ) : (
           <AnimatePresence mode="wait">
             {screen === "form" ? (
@@ -517,6 +542,15 @@ export default function App() {
                     <p className="card-drop-hint">ou arraste o arquivo para cá</p>
                     <input ref={audioInputRef} type="file" id="audioInput" data-testid="loopsync-audio-input" accept="audio/*" hidden onChange={(event) => { receiveFiles(event.target.files, "audio"); event.target.value = ""; }} />
                   </motion.article>
+                </motion.div>
+
+                <motion.div className="quality-wrap" variants={childFadeUp}>
+                  <QualityPicker
+                    videoQuality={videoQuality}
+                    onVideoQualityChange={setVideoQuality}
+                    audioQuality={audioQuality}
+                    onAudioQualityChange={setAudioQuality}
+                  />
                 </motion.div>
 
                 <AnimatePresence>
@@ -555,7 +589,7 @@ export default function App() {
                   <button type="button" className="btn youtube" id="sendToYouTubeBtn" onClick={sendToYouTube}><span className="yt-mark" aria-hidden="true">▶</span> Enviar para o YouTube</button>
                   <button type="button" className="btn ghost" id="resetBtn" onClick={resetAll}>Criar outro</button>
                 </div>
-                <p className="hint" id="resultMeta">{`Vídeo: ${result.videoDuration} · Áudio: ${result.audioDuration} · Loops: ${result.loopCount} · ${result.width || 0}×${result.height || 0} · ${(Number(result.sizeBytes || 0) / 1024 / 1024).toFixed(1)} MB`}</p>
+                <p className="hint" id="resultMeta">{`Vídeo: ${result.videoDuration} · Áudio: ${result.audioDuration} · Loops: ${result.loopCount} · ${result.width || 0}×${result.height || 0} · ${(Number(result.sizeBytes || 0) / 1024 / 1024).toFixed(1)} MB · Qualidade: vídeo ${videoQualityShort(result.videoQuality)} / áudio ${audioQualityShort(result.audioQuality)}`}</p>
               </motion.section>
             ) : null}
           </AnimatePresence>
