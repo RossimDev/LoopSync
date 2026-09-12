@@ -13,7 +13,8 @@ import YouTube from "./youtube/YouTube.jsx";
 import "./youtube.css";
 
 const REREAD_BYTES = 65536;
-export const MAX_WASM_TOTAL_BYTES = 1.2 * 1024 * 1024 * 1024;
+export const MAX_WASM_TOTAL_BYTES = 800 * 1024 * 1024;
+export const MAX_WASM_REENCODE_BYTES = 400 * 1024 * 1024;
 
 function computeLoopCount(videoSeconds, audioSeconds) {
   const video = Math.max(0.01, Math.round((Number(videoSeconds) || 0) * 10) / 10);
@@ -330,8 +331,19 @@ export default function App() {
       };
     }
 
-    if ((Number(visualItem.file.size) || 0) + (Number(audioItem.file.size) || 0) > MAX_WASM_TOTAL_BYTES) {
-      throw new Error("Os arquivos são grandes demais para processar no navegador. Use o servidor local ou arquivos menores.");
+    const isImageFile = visualItem.kind === "image";
+    const needsReencode = isImageFile || videoQuality !== "auto";
+    const wasmLimit = needsReencode ? MAX_WASM_REENCODE_BYTES : MAX_WASM_TOTAL_BYTES;
+    const totalBytes = (Number(visualItem.file.size) || 0) + (Number(audioItem.file.size) || 0);
+    if (totalBytes > wasmLimit) {
+      if (needsReencode) {
+        throw new Error(
+          "Os arquivos são grandes demais para processar no navegador com foto ou qualidade de vídeo personalizada (limite de 400 MB). Rode o servidor local com npm start ou use arquivos menores."
+        );
+      }
+      throw new Error(
+        "Os arquivos são grandes demais para processar no navegador (limite de 800 MB). Rode o servidor local com npm start ou use arquivos menores."
+      );
     }
     const browserResult = await processInBrowser({
       videoFile: visualItem.file,

@@ -78,6 +78,39 @@ function extFor(file, fallback) {
   return m ? m[1] : fallback;
 }
 
+function isOOMMessage(text) {
+  if (!text) return false;
+  const lower = String(text).toLowerCase();
+  return (
+    lower.includes("out of memory") ||
+    lower.includes("cannot enlarge memory") ||
+    lower.includes("memory access out of bounds") ||
+    lower.includes("failed to allocate") ||
+    lower.includes("allocation failed") ||
+    lower.includes("cannot allocate memory") ||
+    lower.includes("enomem") ||
+    lower.includes("memory allocation") ||
+    (lower.includes("abort") && lower.includes("memory")) ||
+    lower.includes("out-of-memory") ||
+    lower.includes("oom") ||
+    lower.includes("could not allocate") ||
+    lower.includes("not enough memory")
+  );
+}
+
+function logsContainOOM(logLines) {
+  if (!Array.isArray(logLines) || !logLines.length) return false;
+  return logLines.some((line) => isOOMMessage(line));
+}
+
+function makeOOMError() {
+  const err = new Error(
+    "O navegador ficou sem memória para processar estes arquivos. Tente arquivos menores ou rode o servidor local com npm start."
+  );
+  err.code = "OUT_OF_MEMORY";
+  return err;
+}
+
 export function buildArgs({
   videoName,
   audioName,
@@ -167,11 +200,20 @@ export async function processInBrowser({ videoFile, audioFile, videoDuration, au
 
   report(8, "Preparando arquivos…");
 
-  // fetchFile with friendly error messages (Part 2.2)
+  // fetchFile with friendly error messages (Part 2.2) + OOM detection
   try {
     await ffmpeg.writeFile(videoName, await fetchFile(videoFile));
   } catch (err) {
     ffmpeg.off("log", onLog);
+    if (isOOMMessage(err && err.message) || logsContainOOM(logLines)) {
+      const last30 = logLines.slice(-30).join("\n");
+      console.error("=== ffmpeg log OOM (últimas ~30 linhas) ===\n" + last30);
+      try { await ffmpeg.terminate(); } catch { /* ignore */ }
+      resetEngine();
+      const oom = makeOOMError();
+      oom._ffmpegLogs = last30;
+      throw oom;
+    }
     const friendly = new Error(
       isImage
         ? "Não foi possível ler a imagem selecionada. Selecione o arquivo novamente."
@@ -184,6 +226,15 @@ export async function processInBrowser({ videoFile, audioFile, videoDuration, au
     await ffmpeg.writeFile(audioName, await fetchFile(audioFile));
   } catch (err) {
     ffmpeg.off("log", onLog);
+    if (isOOMMessage(err && err.message) || logsContainOOM(logLines)) {
+      const last30 = logLines.slice(-30).join("\n");
+      console.error("=== ffmpeg log OOM (últimas ~30 linhas) ===\n" + last30);
+      try { await ffmpeg.terminate(); } catch { /* ignore */ }
+      resetEngine();
+      const oom = makeOOMError();
+      oom._ffmpegLogs = last30;
+      throw oom;
+    }
     const friendly = new Error("Não foi possível ler o áudio selecionado. Selecione o arquivo novamente.");
     friendly.code = "REREAD_AUDIO";
     throw friendly;
@@ -220,7 +271,16 @@ export async function processInBrowser({ videoFile, audioFile, videoDuration, au
     let blob;
     try {
       blob = await run(preferCopy);
-    } catch {
+    } catch (err) {
+      if (logsContainOOM(logLines) || isOOMMessage(err && err.message)) {
+        const last30 = logLines.slice(-30).join("\n");
+        console.error("=== ffmpeg log OOM (últimas ~30 linhas) ===\n" + last30);
+        try { await ffmpeg.terminate(); } catch { /* ignore */ }
+        resetEngine();
+        const oom = makeOOMError();
+        oom._ffmpegLogs = last30;
+        throw oom;
+      }
       if (isImage || !preferCopy) {
         const last30 = logLines.slice(-30).join("\n");
         console.error("=== ffmpeg log (últimas ~30 linhas) ===\n" + last30);
@@ -238,7 +298,16 @@ export async function processInBrowser({ videoFile, audioFile, videoDuration, au
       report(10, "Recodificando para garantir compatibilidade…");
       try {
         blob = await run(false);
-      } catch {
+      } catch (err2) {
+        if (logsContainOOM(logLines) || isOOMMessage(err2 && err2.message)) {
+          const last30 = logLines.slice(-30).join("\n");
+          console.error("=== ffmpeg log OOM (últimas ~30 linhas) ===\n" + last30);
+          try { await ffmpeg.terminate(); } catch { /* ignore */ }
+          resetEngine();
+          const oom = makeOOMError();
+          oom._ffmpegLogs = last30;
+          throw oom;
+        }
         const last30 = logLines.slice(-30).join("\n");
         console.error("=== ffmpeg log (últimas ~30 linhas) ===\n" + last30);
         const friendly = new Error(
@@ -260,8 +329,21 @@ export async function processInBrowser({ videoFile, audioFile, videoDuration, au
     ) {
       usedCopy = false;
       report(12, "Ajustando o corte final com precisão…");
-      blob = await run(false);
-      actualDuration = await blobDuration(blob);
+      try {
+        blob = await run(false);
+        actualDuration = await blobDuration(blob);
+      } catch (err) {
+        if (logsContainOOM(logLines) || isOOMMessage(err && err.message)) {
+          const last30 = logLines.slice(-30).join("\n");
+          console.error("=== ffmpeg log OOM (últimas ~30 linhas) ===\n" + last30);
+          try { await ffmpeg.terminate(); } catch { /* ignore */ }
+          resetEngine();
+          const oom = makeOOMError();
+          oom._ffmpegLogs = last30;
+          throw oom;
+        }
+        throw err;
+      }
     }
 
     report(99, "Finalizando…");
