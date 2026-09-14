@@ -4,6 +4,7 @@ import QualityPicker from "./QualityPicker.jsx";
 import { kindOfFile, loadImageSize, loadVideoMeta, loadAudioDuration } from "./lib/files.js";
 import { formatDuration } from "./lib/format.js";
 import { outputFileName } from "./lib/naming.js";
+import { addHistoryEntry, createThumbFromVideoFile } from "./lib/history.js";
 
 const STATUS_LABEL = {
   queued: "Aguardando",
@@ -268,6 +269,36 @@ export default function Batch({
         setRows((current) => current.map((item) => item.id === id
           ? { ...item, status: "done", percent: 100, text: "Concluído", result, error: null }
           : item));
+
+        // Save to history
+        try {
+          let thumbDataUrl = null;
+          if (result.blob) {
+            thumbDataUrl = await createThumbFromVideoFile(result.blob);
+          }
+          await addHistoryEntry({
+            fileName: result.fileName || row.fileName,
+            sizeBytes: result.sizeBytes,
+            width: result.width,
+            height: result.height,
+            duration: result.actualDuration,
+            videoDuration: result.videoDuration,
+            audioDuration: result.audioDuration,
+            outputDuration: result.outputDuration,
+            loopCount: result.loopCount,
+            videoQuality: result.videoQuality,
+            audioQuality: result.audioQuality,
+            isImage: result.isImage || visual.kind === "image",
+            originalVisualName: result.originalVisualName || visual.name,
+            originalAudioName: result.originalAudioName || audio.name,
+            thumbDataUrl,
+            blobUrl: result.blobUrl,
+            downloadUrl: result.downloadUrl,
+            jobId: result.jobId,
+          });
+        } catch (e) {
+          console.warn("Batch history save failed", e);
+        }
       } catch (error) {
         setRows((current) => current.map((item) => item.id === id
           ? { ...item, status: "error", percent: 0, text: "Erro", result: null, error: error.message || "Não foi possível gerar este vídeo." }

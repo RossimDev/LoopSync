@@ -10,10 +10,15 @@ import ImageSizePicker from "./ImageSizePicker.jsx";
 import QualityPicker from "./QualityPicker.jsx";
 import Batch from "./Batch.jsx";
 import YouTube from "./youtube/YouTube.jsx";
+import Bases from "./Bases.jsx";
+import History from "./History.jsx";
+import { addHistoryEntry, createThumbFromVideoFile } from "./lib/history.js";
+import { saveBase as saveBaseFile } from "./lib/bases.js";
 import "./youtube.css";
 
 const REREAD_BYTES = 65536;
-export const MAX_WASM_TOTAL_BYTES = 1.2 * 1024 * 1024 * 1024;
+export const MAX_WASM_TOTAL_BYTES = 800 * 1024 * 1024;
+export const MAX_WASM_REENCODE_BYTES = 400 * 1024 * 1024;
 
 function computeLoopCount(videoSeconds, audioSeconds) {
   const video = Math.max(0.01, Math.round((Number(videoSeconds) || 0) * 10) / 10);
@@ -92,7 +97,11 @@ const fadeUp = { hidden: { opacity: 0, y: 24 }, show: { opacity: 1, y: 0, transi
 const childFadeUp = { hidden: { opacity: 0, y: 18 }, show: { opacity: 1, y: 0, transition: springTransition } };
 
 function areaFromHash() {
-  return String(window.location.hash || "").startsWith("#/youtube") ? "youtube" : "loopsync";
+  const h = String(window.location.hash || "");
+  if (h.startsWith("#/youtube")) return "youtube";
+  if (h.startsWith("#/bases")) return "bases";
+  if (h.startsWith("#/history")) return "history";
+  return "loopsync";
 }
 
 function visualOutputDimensions(visual, imageSize) {
@@ -105,6 +114,8 @@ function visualOutputDimensions(visual, imageSize) {
 export default function App() {
   const [area, setArea] = useState(areaFromHash);
   const [youtubeMounted, setYoutubeMounted] = useState(areaFromHash() === "youtube");
+  const [basesMounted, setBasesMounted] = useState(areaFromHash() === "bases");
+  const [historyMounted, setHistoryMounted] = useState(areaFromHash() === "history");
   const [incomingVideo, setIncomingVideo] = useState(null);
 
   const [mode, setMode] = useState("single");
@@ -144,11 +155,19 @@ export default function App() {
 
   useEffect(() => {
     if (area === "youtube") setYoutubeMounted(true);
+    if (area === "bases") setBasesMounted(true);
+    if (area === "history") setHistoryMounted(true);
   }, [area]);
 
   const navigate = useCallback((next) => {
     setArea(next);
-    const target = next === "youtube" ? "#/youtube" : "#/";
+    const map = {
+      youtube: "#/youtube",
+      bases: "#/bases",
+      history: "#/history",
+      loopsync: "#/",
+    };
+    const target = map[next] || "#/";
     if (window.location.hash !== target) {
       window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}${target}`);
     }
@@ -327,11 +346,25 @@ export default function App() {
         videoQuality: serverResult.videoQuality || videoQuality,
         audioQuality: serverResult.audioQuality || audioQuality,
         fileName,
+        originalVisualName: visualItem.name,
+        originalAudioName: audioItem.name,
+        isImage: visualItem.kind === "image",
       };
     }
 
-    if ((Number(visualItem.file.size) || 0) + (Number(audioItem.file.size) || 0) > MAX_WASM_TOTAL_BYTES) {
-      throw new Error("Os arquivos são grandes demais para processar no navegador. Use o servidor local ou arquivos menores.");
+    const isImageFile = visualItem.kind === "image";
+    const needsReencode = isImageFile || videoQuality !== "auto";
+    const wasmLimit = needsReencode ? MAX_WASM_REENCODE_BYTES : MAX_WASM_TOTAL_BYTES;
+    const totalBytes = (Number(visualItem.file.size) || 0) + (Number(audioItem.file.size) || 0);
+    if (totalBytes > wasmLimit) {
+      if (needsReencode) {
+        throw new Error(
+          "Os arquivos são grandes demais para processar no navegador com foto ou qualidade de vídeo personalizada (limite de 400 MB). Rode o servidor local com npm start ou use arquivos menores."
+        );
+      }
+      throw new Error(
+        "Os arquivos são grandes demais para processar no navegador (limite de 800 MB). Rode o servidor local com npm start ou use arquivos menores."
+      );
     }
     const browserResult = await processInBrowser({
       videoFile: visualItem.file,
@@ -364,6 +397,10 @@ export default function App() {
       audioQuality: browserResult.audioQuality || audioQuality,
       file,
       fileName,
+      originalVisualName: visualItem.name,
+      originalAudioName: audioItem.name,
+      isImage: visualItem.kind === "image",
+      blob: browserResult.blob,
     };
   }, [outputSize, videoQuality, audioQuality]);
 
@@ -424,6 +461,41 @@ export default function App() {
       setResult(generated);
       setProgress(100);
       setScreen("result");
+
+      // ── Save to history ──
+      try {
+        let thumbDataUrl = null;
+        if (generated.blob) {
+          thumbDataUrl = await createThumbFromVideoFile(generated.blob);
+        } else if (generated.previewUrl) {
+          // For server mode, try to create thumb from preview URL after a short delay
+          // We can't easily fetch server video blob for thumb in wasm helper if CORS,
+          // but we can attempt using previewUrl as string (video element will load)
+          // Skip for now - server will generate thumb itself
+        }
+        await addHistoryEntry({
+          fileName: generated.fileName,
+          sizeBytes: generated.sizeBytes,
+          width: generated.width,
+          height: generated.height,
+          duration: generated.actualDuration,
+          videoDuration: generated.videoDuration,
+          audioDuration: generated.audioDuration,
+          outputDuration: generated.outputDuration,
+          loopCount: generated.loopCount,
+          videoQuality: generated.videoQuality,
+          audioQuality: generated.audioQuality,
+          isImage: generated.isImage || visual.kind === "image",
+          originalVisualName: generated.originalVisualName || visual.name,
+          originalAudioName: generated.originalAudioName || audio.name,
+          thumbDataUrl,
+          blobUrl: generated.blobUrl,
+          downloadUrl: generated.downloadUrl,
+          jobId: generated.jobId,
+        });
+      } catch (e) {
+        console.warn("History save failed", e);
+      }
     } catch (error) {
       console.error("LoopSync:", error);
       showToast(error && error.message ? error.message : "Não foi possível gerar o vídeo.", "error");
@@ -471,6 +543,45 @@ export default function App() {
     navigate("youtube");
   }, [navigate]);
 
+  // Bases handlers
+  const handleUseVisualBase = useCallback(async (file) => {
+    await applyVisual(file);
+    navigate("loopsync");
+    showToast("Base visual carregada. Agora selecione o áudio.");
+  }, [applyVisual, navigate, showToast]);
+
+  const handleUseAudioBase = useCallback(async (file) => {
+    await applyAudio(file);
+    navigate("loopsync");
+    showToast("Base de áudio carregada. Agora selecione o vídeo.");
+  }, [applyAudio, navigate, showToast]);
+
+  const handleSaveVisualBase = useCallback(async () => {
+    if (!visual || !visual.file) {
+      showToast("Nenhum visual para salvar.", "error");
+      return;
+    }
+    try {
+      await saveBaseFile(visual.file, { name: visual.name });
+      showToast(`Vídeo/foto "${visual.name}" salvo nas bases!`, "info");
+    } catch (e) {
+      showToast(e.message || "Erro ao salvar base.", "error");
+    }
+  }, [visual, showToast]);
+
+  const handleSaveAudioBase = useCallback(async () => {
+    if (!audio || !audio.file) {
+      showToast("Nenhum áudio para salvar.", "error");
+      return;
+    }
+    try {
+      await saveBaseFile(audio.file, { name: audio.name });
+      showToast(`Áudio "${audio.name}" salvo nas bases!`, "info");
+    } catch (e) {
+      showToast(e.message || "Erro ao salvar base.", "error");
+    }
+  }, [audio, showToast]);
+
   return (
     <main className="page">
       <header className="hero">
@@ -490,6 +601,8 @@ export default function App() {
 
       <nav className="app-nav" aria-label="Áreas do LoopSync">
         <button type="button" className={`nav-pill${area === "loopsync" ? " active" : ""}`} data-testid="nav-loopsync" onClick={() => navigate("loopsync")} aria-current={area === "loopsync" ? "page" : undefined}><span aria-hidden="true">🎬</span> LoopSync</button>
+        <button type="button" className={`nav-pill${area === "bases" ? " active" : ""}`} data-testid="nav-bases" onClick={() => navigate("bases")} aria-current={area === "bases" ? "page" : undefined}><span aria-hidden="true">📚</span> Bases</button>
+        <button type="button" className={`nav-pill${area === "history" ? " active" : ""}`} data-testid="nav-history" onClick={() => navigate("history")} aria-current={area === "history" ? "page" : undefined}><span aria-hidden="true">🕘</span> Histórico</button>
         <button type="button" className={`nav-pill${area === "youtube" ? " active" : ""}`} data-testid="nav-youtube" onClick={() => navigate("youtube")} aria-current={area === "youtube" ? "page" : undefined}><span aria-hidden="true">▶</span> YouTube</button>
       </nav>
 
@@ -499,7 +612,19 @@ export default function App() {
         </div>
       ) : null}
 
-      <div className="area-panel" data-testid="area-loopsync" hidden={area === "youtube"}>
+      {basesMounted ? (
+        <div className="area-panel" data-testid="area-bases" hidden={area !== "bases"}>
+          <Bases showToast={showToast} onUseVisual={handleUseVisualBase} onUseAudio={handleUseAudioBase} currentVisual={visual} currentAudio={audio} />
+        </div>
+      ) : null}
+
+      {historyMounted ? (
+        <div className="area-panel" data-testid="area-history" hidden={area !== "history"}>
+          <History showToast={showToast} />
+        </div>
+      ) : null}
+
+      <div className="area-panel" data-testid="area-loopsync" hidden={area !== "loopsync" && area !== "bases" && area !== "history" && area !== "youtube" ? false : area !== "loopsync"}>
         <div className="mode-switch" role="group" aria-label="Modo de geração">
           <button type="button" className={mode === "single" ? "active" : ""} data-testid="mode-single" aria-pressed={mode === "single"} onClick={() => chooseMode("single")}>Vídeo único</button>
           <button type="button" className={mode === "batch" ? "active" : ""} data-testid="mode-batch" aria-pressed={mode === "batch"} onClick={() => chooseMode("batch")}>Em massa</button>
@@ -532,6 +657,11 @@ export default function App() {
                     <button type="button" className="btn subtle" data-testid="select-visual" onClick={() => videoInputRef.current?.click()}>Selecione vídeo ou imagem</button>
                     <p className="card-drop-hint">ou arraste o arquivo para cá</p>
                     <input ref={videoInputRef} type="file" id="videoInput" data-testid="loopsync-video-input" accept="video/*,image/*" hidden onChange={(event) => { receiveFiles(event.target.files, "video"); event.target.value = ""; }} />
+                    {visual && (
+                      <button type="button" className="btn ghost compact bases-inline-save" onClick={handleSaveVisualBase} data-testid="inline-save-visual">
+                        📚 Salvar como base
+                      </button>
+                    )}
                   </motion.article>
 
                   <motion.article className={`card${audio ? " selected" : ""}${dragTarget === "audio" ? " drop-active" : ""}`} data-card="audio" variants={childFadeUp} whileHover={{ y: -4, transition: { duration: 0.2 } }} {...dropHandlers("audio")}>
@@ -541,6 +671,11 @@ export default function App() {
                     <button type="button" className="btn subtle" data-testid="select-audio" onClick={() => audioInputRef.current?.click()}>Selecione áudio</button>
                     <p className="card-drop-hint">ou arraste o arquivo para cá</p>
                     <input ref={audioInputRef} type="file" id="audioInput" data-testid="loopsync-audio-input" accept="audio/*" hidden onChange={(event) => { receiveFiles(event.target.files, "audio"); event.target.value = ""; }} />
+                    {audio && (
+                      <button type="button" className="btn ghost compact bases-inline-save" onClick={handleSaveAudioBase} data-testid="inline-save-audio">
+                        📚 Salvar como base
+                      </button>
+                    )}
                   </motion.article>
                 </motion.div>
 
@@ -590,6 +725,10 @@ export default function App() {
                   <button type="button" className="btn ghost" id="resetBtn" onClick={resetAll}>Criar outro</button>
                 </div>
                 <p className="hint" id="resultMeta">{`Vídeo: ${result.videoDuration} · Áudio: ${result.audioDuration} · Loops: ${result.loopCount} · ${result.width || 0}×${result.height || 0} · ${(Number(result.sizeBytes || 0) / 1024 / 1024).toFixed(1)} MB · Qualidade: vídeo ${videoQualityShort(result.videoQuality)} / áudio ${audioQualityShort(result.audioQuality)}`}</p>
+                <div className="result-extra-actions">
+                  <button type="button" className="btn ghost compact" onClick={() => navigate("history")}>🕘 Ver no histórico</button>
+                  <button type="button" className="btn ghost compact" onClick={() => navigate("bases")}>📚 Ver bases</button>
+                </div>
               </motion.section>
             ) : null}
           </AnimatePresence>
